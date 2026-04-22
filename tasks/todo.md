@@ -215,6 +215,7 @@ Blocker for WP-2 kickoff: `uv` must be installed on the dev host (`curl -LsSf ht
 - [x] Write accept test: 10 sample questions end-to-end — done 2026-04-22 (WP-9; transport-bypass harness, external-Claude-Code driving deferred to P5 pilot)
 - [x] Publish correctness + token-reduction benchmark per roadmap P1 exit criteria — done 2026-04-22 (WP-11; all numerical criteria PASS with wide margins)
 - [x] ADR-0005 Tailscale tenant — accepted 2026-04-22 (WP-12; option A personal tailnet, sidecar commented)
+- [ ] **Scratch doc cleanup** — xoá `tasks/_scratch_server_setup.md` khi WP-10 đóng và `docs/docker-quickstart.md` + `docs/dev-workflow.md` đã ship. File là ghi chú tạm cho dev-loop 2 máy (laptop code, server chạy), KHÔNG phải permanent doc.
 
 ## Blockers / open questions
 
