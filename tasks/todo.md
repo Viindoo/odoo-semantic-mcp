@@ -56,7 +56,6 @@ recall + latency đủ cho P3 trên RTX 3060 12GB (`osm-dev`).
 - [x] `scripts/bench_corpus.py` — AST extract docstring/body pairs (stdlib only)
 - [x] `scripts/bench_embed.py` — sentence-transformers harness (dry-run + `--max-seq-length` cap)
 - [x] Corpus extract: 258 pairs từ `tests/fixtures/odoo_ce_subset`
-- [x] Runbook: `tasks/_scratch_embed_spike.md` (xoá khi spike close — có thể xoá ngay)
 - [x] Run 3 models trên osm-dev: `bge-code-v1`, `bge-m3`, `jina-v2-base-code` — results ở `reports/embed-spike/`
 - [x] `research/embedding-self-host-spike.md` — done
 - [x] ADR-0002 Revision section appended — decision stands (bge-m3 added to P3 candidate list)
