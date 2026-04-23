@@ -1392,25 +1392,21 @@ def _index_xml_files(
                 """,
                 (module_id, key),
             )
-            for child_id, _child_xmlid in cur.fetchall():
-                # Look up the raw ref — not stored in the schema; best-effort
-                # re-parse to recover it. A cached+unchanged file with a
-                # pending extension is rare enough that this one-off parse is
-                # acceptable.
+            pending_children = cur.fetchall()
+            if pending_children:
+                # Re-parse once for the whole file — covers every pending
+                # extension row, not just the first. Cached file with N>1
+                # unresolved extensions previously left N-1 of them NULL.
                 result = parse_view_file(xml_path)
-                for parsed in result.views:
-                    if parsed.mode == "extension" and parsed.inherit_xmlid:
-                        # find the matching row by xmlid
-                        cur.execute(
-                            "SELECT id FROM views WHERE module_id=%s AND xmlid=%s",
-                            (module_id, parsed.xmlid),
-                        )
-                        r = cur.fetchone()
-                        if r is not None and int(r[0]) == int(child_id):
-                            inherit_backlog[(int(child_id), parsed.inherit_xmlid)] = (
-                                parsed.inherit_xmlid
-                            )
-                break  # one re-parse serves all pending children in this file
+                xmlid_to_inherit = {
+                    p.xmlid: p.inherit_xmlid
+                    for p in result.views
+                    if p.mode == "extension" and p.inherit_xmlid
+                }
+                for child_id, child_xmlid in pending_children:
+                    inherit_xmlid = xmlid_to_inherit.get(child_xmlid)
+                    if inherit_xmlid is not None:
+                        inherit_backlog[(int(child_id), inherit_xmlid)] = inherit_xmlid
             continue
 
         result = parse_view_file(xml_path)

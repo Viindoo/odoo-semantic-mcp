@@ -24,6 +24,11 @@ from lxml import etree
 
 _logger = logging.getLogger(__name__)
 
+# Hardened parser for any XML originating from disk. Disables external entity
+# resolution (XXE) and outbound network lookups so a poisoned addon XML
+# cannot read local files or trigger SSRF via DTD reference.
+_SAFE_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
+
 # ---------------------------------------------------------------------------
 # Public dataclasses
 # ---------------------------------------------------------------------------
@@ -406,7 +411,7 @@ def parse_view_file(path: Path) -> FileParseResult:
         return FileParseResult((), (f"io_error:{path}:{exc}",))
 
     try:
-        tree = etree.fromstring(source)
+        tree = etree.fromstring(source, _SAFE_PARSER)
     except etree.XMLSyntaxError as exc:
         _logger.warning("parse_view_file: xml syntax error in %s: %s", path, exc)
         return FileParseResult((), (f"xml_syntax_error:{path}:{exc}",))

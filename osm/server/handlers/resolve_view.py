@@ -127,17 +127,24 @@ def _fetch_chain_for_schema(
     ``inherit_id`` FK is schema-local (see ``architecture/graph-store.md`` —
     no cross-schema hard FKs), so each schema's chain is self-contained.
     """
+    # Depth counter caps recursion at 50 levels — protects against a
+    # cyclic ``inherit_id`` (poisoned/buggy index) that would otherwise spin
+    # the recursive CTE up to Postgres' max_recursive_iterations and DoS
+    # every resolve_view call for that xmlid.
     sql = f"""
     WITH RECURSIVE chain AS (
         SELECT v.id, v.xmlid, v.module_id, v.model, v.view_type, v.mode,
-               v.priority, v.inherit_id, v.arch_xml, v.indexed_at_sha
+               v.priority, v.inherit_id, v.arch_xml, v.indexed_at_sha,
+               0 AS depth
           FROM "{schema}".views v
          WHERE v.xmlid = %s AND v.mode = 'primary'
         UNION ALL
         SELECT c.id, c.xmlid, c.module_id, c.model, c.view_type, c.mode,
-               c.priority, c.inherit_id, c.arch_xml, c.indexed_at_sha
+               c.priority, c.inherit_id, c.arch_xml, c.indexed_at_sha,
+               p.depth + 1
           FROM "{schema}".views c
           JOIN chain p ON c.inherit_id = p.id
+         WHERE p.depth < 50
     )
     SELECT chain.id, chain.xmlid, mod.name AS module_name, chain.model,
            chain.view_type, chain.mode, chain.priority, mod.load_order,

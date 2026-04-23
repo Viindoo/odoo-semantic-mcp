@@ -19,6 +19,12 @@ from dataclasses import dataclass, field
 
 from lxml import etree
 
+# Hardened parser used for every XML deserialization in this module: disables
+# external entity resolution (XXE) and outbound network lookups. Patch content
+# originates from indexed addon XML and is therefore in the same trust class
+# as the file the indexer parsed; we still refuse to dereference DTDs.
+_SAFE_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
+
 # ---------------------------------------------------------------------------
 # Public dataclasses
 # ---------------------------------------------------------------------------
@@ -91,7 +97,7 @@ def _parse_patch_spec(content: str, position: str) -> etree._Element:
     so accidental self-iteration via ``getiterator`` is obvious.
     """
     wrapped = f'<_osm_patch_spec position="{position}">{content}</_osm_patch_spec>'
-    return etree.fromstring(wrapped.encode("utf-8"))
+    return etree.fromstring(wrapped.encode("utf-8"), _SAFE_PARSER)
 
 
 def _locate(root: etree._Element, expr: str) -> tuple[etree._Element | None, str | None]:
@@ -195,7 +201,7 @@ def resolve_chain(
     :returns: :class:`ResolvedView` with ``final_xml``, per-patch
         ``patch_log`` and a human-readable ``warnings`` list.
     """
-    root = etree.fromstring(primary_arch)
+    root = etree.fromstring(primary_arch, _SAFE_PARSER)
     patch_log: list[PatchLogEntry] = []
     warnings: list[str] = []
     # Canonical element paths (via ElementTree.getpath) of every subtree root
