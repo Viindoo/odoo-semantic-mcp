@@ -151,12 +151,31 @@ def _collect_xml_view_files(module: ManifestRecord) -> list[Path]:
 
     Mirrors Odoo's convention — views live under ``views/``. Controllers
     templates and report templates are out of scope for the WP-15 resolver.
+
+    Symlink escape guard: a compromised/malicious addon checkout could drop a
+    symlink under ``views/`` pointing outside the module tree (e.g. at
+    ``/etc/passwd.xml``). We resolve each candidate and skip anything whose
+    real path is not rooted inside ``views_dir``.
     """
     module_dir = module.path.parent
     views_dir = module_dir / "views"
     if not views_dir.is_dir():
         return []
-    return sorted(p for p in views_dir.rglob("*.xml") if p.is_file())
+    views_root = views_dir.resolve()
+    kept: list[Path] = []
+    for p in views_dir.rglob("*.xml"):
+        if not p.is_file():
+            continue
+        try:
+            resolved = p.resolve()
+        except OSError:
+            _logger.warning("symlink resolve failed, skipped: %s", p)
+            continue
+        if not resolved.is_relative_to(views_root):
+            _logger.warning("symlink escape refused: %s -> %s", p, resolved)
+            continue
+        kept.append(p)
+    return sorted(kept)
 
 
 def _collect_python_files(module: ManifestRecord) -> list[Path]:
@@ -165,12 +184,30 @@ def _collect_python_files(module: ManifestRecord) -> list[Path]:
     Includes __init__.py so the conditional-import scanner can be fed later.
     Only models/ is walked in P1; controllers/, wizards/ are out of scope for
     Phase 1 indexer.
+
+    Symlink escape guard: matches ``_collect_xml_view_files`` — a malicious
+    addon tree could symlink ``models/evil.py`` at external code. Skip any
+    resolved path not rooted under ``models_dir``.
     """
     module_dir = module.path.parent
     models_dir = module_dir / "models"
     if not models_dir.is_dir():
         return []
-    return sorted(p for p in models_dir.rglob("*.py") if p.is_file())
+    models_root = models_dir.resolve()
+    kept: list[Path] = []
+    for p in models_dir.rglob("*.py"):
+        if not p.is_file():
+            continue
+        try:
+            resolved = p.resolve()
+        except OSError:
+            _logger.warning("symlink resolve failed, skipped: %s", p)
+            continue
+        if not resolved.is_relative_to(models_root):
+            _logger.warning("symlink escape refused: %s -> %s", p, resolved)
+            continue
+        kept.append(p)
+    return sorted(kept)
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +350,11 @@ def _upsert_module(
         ),
     )
     fetched = cur.fetchone()
-    assert fetched is not None
+    if fetched is None:
+        raise RuntimeError(
+            f"INSERT INTO modules RETURNING id returned no row for "
+            f"module {module.name!r} (path {module.path!s})"
+        )
     return int(fetched[0]), True
 
 
@@ -446,7 +487,11 @@ def _upsert_model_row(
         ),
     )
     fetched = cur.fetchone()
-    assert fetched is not None
+    if fetched is None:
+        raise RuntimeError(
+            f"INSERT INTO models RETURNING id returned no row for "
+            f"model {model_name!r} in module_id={module_id}"
+        )
     return int(fetched[0]), "insert"
 
 
@@ -546,7 +591,12 @@ def _upsert_method_row(
         ),
     )
     fetched = cur.fetchone()
-    assert fetched is not None
+    if fetched is None:
+        raise RuntimeError(
+            f"INSERT INTO methods RETURNING id returned no row for "
+            f"method {parsed.method_name!r} in model_id={model_id} "
+            f"({file_path}:{parsed.start_line})"
+        )
     return int(fetched[0]), "insert"
 
 
@@ -649,7 +699,11 @@ def _apply_override_links(
         seen: set[int] = set()
         prev_row: int | None = None
         for link in chain:
-            assert link.source_row is not None
+            # link.source_row is not None here: `continue` guard above filters
+            # synthesized links out before grouping. The `if` below exists
+            # for mypy narrowing only — `seen`/continue equivalent is dead code.
+            if link.source_row is None:  # pragma: no cover - defensive
+                continue
             key = (link.model_name, link.module_name, link.field_name,
                    link.source_row.start_line)
             my_id = field_id_map.get(key)
@@ -681,7 +735,11 @@ def _apply_override_links(
         m_seen: set[int] = set()
         m_prev_row: int | None = None
         for mlink in mchain:
-            assert mlink.source_row is not None
+            # mlink.source_row is not None here: `continue` guard above filters
+            # synthesized links out before grouping. The `if` below exists
+            # for mypy narrowing only — `seen`/continue equivalent is dead code.
+            if mlink.source_row is None:  # pragma: no cover - defensive
+                continue
             mkey = (mlink.model_name, mlink.module_name, mlink.method_name,
                     mlink.source_row.start_line)
             my_id = method_id_map.get(mkey)
@@ -1144,7 +1202,12 @@ def _upsert_field_row_via_driver(
         ),
     )
     fetched = cur.fetchone()
-    assert fetched is not None
+    if fetched is None:
+        raise RuntimeError(
+            f"INSERT INTO fields RETURNING id returned no row for "
+            f"field {parsed.field_name!r} in model_id={model_id} "
+            f"({file_path}:{parsed.start_line})"
+        )
     return int(fetched[0]), "insert"
 
 
@@ -1266,7 +1329,12 @@ def _upsert_view_row(
         ),
     )
     fetched = cur.fetchone()
-    assert fetched is not None
+    if fetched is None:
+        raise RuntimeError(
+            f"INSERT INTO views RETURNING id returned no row for "
+            f"view xmlid={parsed.xmlid!r} in module_id={module_id} "
+            f"({parsed.file_path}:{parsed.start_line})"
+        )
     return int(fetched[0]), "insert"
 
 

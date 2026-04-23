@@ -15,6 +15,7 @@ No database access. Caller (WP-16 handler) is responsible for fetching
 from __future__ import annotations
 
 import copy
+import functools
 from dataclasses import dataclass, field
 
 from lxml import etree
@@ -100,6 +101,20 @@ def _parse_patch_spec(content: str, position: str) -> etree._Element:
     return etree.fromstring(wrapped.encode("utf-8"), _SAFE_PARSER)
 
 
+@functools.lru_cache(maxsize=256)
+def _compile_xpath(expr: str) -> etree.XPath | None:
+    """Compile ``expr`` into a reusable lxml ``ETXPath`` object.
+
+    Returns ``None`` when lxml rejects the expression. Cached so a view with
+    N extensions does not pay the compile cost N times; sentinel-cached for
+    bad exprs too so repeated malformed patches don't thrash.
+    """
+    try:
+        return etree.ETXPath(expr)
+    except etree.XPathSyntaxError:
+        return None
+
+
 def _locate(root: etree._Element, expr: str) -> tuple[etree._Element | None, str | None]:
     """Run ``expr`` against ``root``; return ``(node, error_reason)``.
 
@@ -107,9 +122,8 @@ def _locate(root: etree._Element, expr: str) -> tuple[etree._Element | None, str
     else ``None``. When the expression is valid but matches nothing the tuple
     is ``(None, None)``.
     """
-    try:
-        xpath = etree.ETXPath(expr)
-    except etree.XPathSyntaxError:
+    xpath = _compile_xpath(expr)
+    if xpath is None:
         return None, "malformed_expr"
     try:
         matches = xpath(root)

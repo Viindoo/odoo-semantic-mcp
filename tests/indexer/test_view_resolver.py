@@ -322,6 +322,89 @@ def test_priority_tie_load_order() -> None:
 
 
 # ---------------------------------------------------------------------------
+# WP-17 hardening coverage — attribute-delete semantics + root replacement
+# ---------------------------------------------------------------------------
+
+
+def test_attributes_op_empty_value_deletes_attr() -> None:
+    """``<attribute name="X"/>`` with empty text MUST delete attribute ``X``.
+
+    Mirrors Odoo core's ``apply_inheritance_specs`` branch in
+    ``odoo/tools/template_inheritance.py`` (line ~233-236): when value is
+    empty and the attribute is present on the node, delete it.
+    """
+    primary = _primary_arch("cv_basic_form")
+    # Sanity: primary <form> carries ``string="Partner"`` — confirm before
+    # asserting its absence after the delete extension.
+    primary_root = etree.fromstring(primary)
+    assert primary_root.get("string") == "Partner"
+
+    ext = (
+        ViewRow(xmlid="test.attr_delete"),
+        [
+            PatchRow(
+                ordinal=0,
+                expr="//form",
+                position="attributes",
+                # Empty-text <attribute/> deletes `string` on <form>.
+                content='<attribute name="string"></attribute>',
+            )
+        ],
+    )
+    resolved = resolve_chain(primary, extensions=[ext])
+    assert len(resolved.patch_log) == 1
+    assert resolved.patch_log[0].applied is True
+    assert resolved.warnings == []
+    final_root = etree.fromstring(resolved.final_xml)
+    assert final_root.tag == "form"
+    # Deleted: attribute MUST NOT be present.
+    assert "string" not in final_root.attrib
+
+
+def test_replace_targets_document_root() -> None:
+    """``position="replace"`` on the document root swaps the tree root.
+
+    ``_apply_replace`` returns ``was_root=True`` when ``node.getparent()``
+    is None. The caller must rebuild the tree from the first spec child.
+    Subsequent patches should target the new root.
+    """
+    primary = _primary_arch("cv_basic_form")
+    # Two extensions: (1) replace the <form> root with a fresh <tree>;
+    # (2) add a field inside the new root to prove the new root is live.
+    ext1 = (
+        ViewRow(xmlid="test.replace_root"),
+        [
+            PatchRow(
+                ordinal=0,
+                # Match the document element regardless of its tag.
+                expr="/*",
+                position="replace",
+                content='<tree><field name="id"/></tree>',
+            )
+        ],
+    )
+    ext2 = (
+        ViewRow(xmlid="test.after_root_replace"),
+        [
+            PatchRow(
+                ordinal=0,
+                expr="//field[@name='id']",
+                position="after",
+                content='<field name="create_date"/>',
+            )
+        ],
+    )
+    resolved = resolve_chain(primary, extensions=[ext1, ext2])
+    assert [e.applied for e in resolved.patch_log] == [True, True], resolved.warnings
+    final = etree.fromstring(resolved.final_xml)
+    # Root swapped from <form> to <tree>.
+    assert final.tag == "tree"
+    names = [f.get("name") for f in final.xpath("//field[@name]")]
+    # First spec child landed as new root's content; second patch landed too.
+    assert names == ["id", "create_date"]
+
+
+# ---------------------------------------------------------------------------
 # Extra sanity — frozen dataclass shape
 # ---------------------------------------------------------------------------
 

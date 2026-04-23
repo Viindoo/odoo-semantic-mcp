@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from psycopg import sql
 from pydantic import BaseModel, Field
 
 from osm.indexer.view_resolver import (
@@ -131,18 +132,22 @@ def _fetch_chain_for_schema(
     # cyclic ``inherit_id`` (poisoned/buggy index) that would otherwise spin
     # the recursive CTE up to Postgres' max_recursive_iterations and DoS
     # every resolve_view call for that xmlid.
-    sql = f"""
+    # Schema is already ``validate_tenant``-checked upstream; composing via
+    # ``sql.Identifier`` is structural defence-in-depth against future callers
+    # that forget the validation.
+    query = sql.SQL(
+        """
     WITH RECURSIVE chain AS (
         SELECT v.id, v.xmlid, v.module_id, v.model, v.view_type, v.mode,
                v.priority, v.inherit_id, v.arch_xml, v.indexed_at_sha,
                0 AS depth
-          FROM "{schema}".views v
+          FROM {schema}.views v
          WHERE v.xmlid = %s AND v.mode = 'primary'
         UNION ALL
         SELECT c.id, c.xmlid, c.module_id, c.model, c.view_type, c.mode,
                c.priority, c.inherit_id, c.arch_xml, c.indexed_at_sha,
                p.depth + 1
-          FROM "{schema}".views c
+          FROM {schema}.views c
           JOIN chain p ON c.inherit_id = p.id
          WHERE p.depth < 50
     )
@@ -150,9 +155,10 @@ def _fetch_chain_for_schema(
            chain.view_type, chain.mode, chain.priority, mod.load_order,
            chain.inherit_id, chain.arch_xml, chain.indexed_at_sha
       FROM chain
-      JOIN "{schema}".modules mod ON mod.id = chain.module_id
+      JOIN {schema}.modules mod ON mod.id = chain.module_id
     """
-    cur.execute(sql, (xmlid,))
+    ).format(schema=sql.Identifier(schema))
+    cur.execute(query, (xmlid,))
     rows: list[_ChainRow] = []
     for (
         vid, row_xmlid, module_name, model, view_type, mode, priority,
@@ -185,12 +191,12 @@ def _fetch_patches_for_schema(
     """
     if not view_ids:
         return {}
-    sql = (
-        f'SELECT view_id, ordinal, expr, position, content '
-        f'FROM "{schema}".view_patches '
-        f'WHERE view_id = ANY(%s) ORDER BY view_id, ordinal'
-    )
-    cur.execute(sql, (view_ids,))
+    query = sql.SQL(
+        "SELECT view_id, ordinal, expr, position, content "
+        "FROM {schema}.view_patches "
+        "WHERE view_id = ANY(%s) ORDER BY view_id, ordinal"
+    ).format(schema=sql.Identifier(schema))
+    cur.execute(query, (view_ids,))
     out: dict[int, list[PatchRow]] = {}
     for view_id, ordinal, expr, position, content in cur.fetchall():
         out.setdefault(int(view_id), []).append(
@@ -285,7 +291,9 @@ def resolve_view(
     shas = [primary.indexed_at_sha] + [r.indexed_at_sha for r in extension_rows]
     sha = effective_indexed_at_sha(shas)
     if sha is None:
-        raise StaleIndexError("stale_cross_schema_ref on views rows")
+        # Generic message — do not leak internal topology (cross-schema ref,
+        # table names). Operators trace via handler logs + indexed_at_sha diff.
+        raise StaleIndexError("index out of date; re-run indexer")
 
     resolved = resolve_chain(primary.arch_xml, resolver_input)
 
