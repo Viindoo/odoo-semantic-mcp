@@ -204,8 +204,7 @@ def main(argv: list[str] | None = None) -> int:
 
             bind_hosts = [args.host] if args.host not in ("0.0.0.0", "::") else []
             host_list = ["127.0.0.1", "localhost", "[::1]", *bind_hosts, *extras]
-            seen: set[str] = set()
-            dedup = [h for h in host_list if not (h in seen or seen.add(h))]
+            dedup = list(dict.fromkeys(host_list))
             app.settings.transport_security = TransportSecuritySettings(
                 enable_dns_rebinding_protection=True,
                 allowed_hosts=[f"{h}:*" for h in dedup],

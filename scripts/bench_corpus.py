@@ -33,10 +33,9 @@ import argparse
 import ast
 import json
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
-
 
 _TRIVIAL_BODY_NODES = (ast.Pass, ast.Expr)
 
