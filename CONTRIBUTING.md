@@ -14,7 +14,7 @@ Tài liệu này dành cho developer muốn contribute hoặc phát triển thê
 | **uv** | ≥ 0.4 | Package manager (nhanh hơn pip) |
 
 > Nếu chưa có `uv`: `curl -LsSf https://astral.sh/uv/install.sh | sh`  
-> Nếu chưa có Docker: cài [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Mac/Windows) hoặc `apt install docker.io` (Ubuntu).
+> Nếu chưa có Docker: xem mục **[Cài Docker](#cài-docker)** bên dưới — có thêm bước cấu hình bắt buộc sau khi cài.
 
 ---
 
@@ -97,17 +97,82 @@ tests/
 
 ---
 
-## Khi Docker Không Có Sẵn
+## Cài Docker
 
-Nếu chưa cài Docker, integration tests tự skip với thông báo:
+Docker cần thiết để chạy integration tests. `testcontainers` tự spin up / destroy Neo4j container — không cần thao tác thủ công — nhưng cần Docker daemon đang chạy và user có quyền dùng socket.
 
+### Ubuntu / Debian
+
+```bash
+# 1. Cài Docker Engine (bản chính thức, mới hơn docker.io của Ubuntu)
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+     -o /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# 2. Start daemon và bật tự khởi động cùng hệ thống
+sudo systemctl enable --now docker
+
+# 3. Thêm user hiện tại vào group docker
+#    (bắt buộc — testcontainers kết nối qua /var/run/docker.sock)
+sudo usermod -aG docker $USER
+
+# 4. Áp dụng thay đổi group — PHẢI logout rồi login lại, hoặc chạy:
+newgrp docker
 ```
-SKIPPED: Neo4j không sẵn sàng. Để chạy integration tests:
-  1. Cài Docker — testcontainers tự spin up Neo4j khi pytest chạy
-  2. Chạy thủ công: make neo4j-up  (hoặc: docker compose up -d neo4j)
+
+> **Quan trọng:** bước 3 bắt buộc. Nếu bỏ qua, testcontainers sẽ báo lỗi  
+> `FileNotFoundError: [Errno 2] No such file or directory` hoặc `Permission denied`  
+> khi cố kết nối `/var/run/docker.sock`.
+
+### macOS
+
+Cài [Docker Desktop](https://www.docker.com/products/docker-desktop/). Sau khi cài, mở Docker Desktop và đợi icon trên taskbar chuyển sang trạng thái "Running". Không cần thêm bước cấu hình.
+
+### Windows
+
+Cài [Docker Desktop](https://www.docker.com/products/docker-desktop/) với backend WSL 2. Sau khi cài, mở Docker Desktop và đợi trạng thái "Running" trước khi chạy test.
+
+### Kiểm tra Docker hoạt động đúng
+
+```bash
+# Kiểm tra daemon đang chạy
+docker info
+
+# Kiểm tra user có quyền dùng socket (không cần sudo)
+docker run --rm hello-world
 ```
 
-Unit tests vẫn chạy bình thường. CI trên GitHub Actions luôn chạy đủ cả hai vì runner `ubuntu-latest` có Docker sẵn.
+Cả hai lệnh phải chạy được **không có sudo**. Nếu `docker info` báo `Permission denied`, cần logout / login lại sau bước 3 ở trên.
+
+### Kiểm tra testcontainers hoạt động
+
+```bash
+make test-integration
+```
+
+Lần chạy đầu tiên sẽ pull image `neo4j:5` (~500 MB) — có thể mất 2–5 phút. Các lần sau Docker cache lại, chạy trong vài giây. Nếu thành công sẽ thấy 14 tests PASSED thay vì SKIPPED.
+
+---
+
+## Khi Integration Tests Vẫn Skip Sau Khi Cài Docker
+
+Chạy `make test-integration` — cuối output có phần `short test summary` hiện lý do cụ thể:
+
+| Lỗi hiện trong summary | Nguyên nhân | Cách fix |
+|------------------------|-------------|----------|
+| `FileNotFoundError: No such file or directory` | Docker chưa cài hoặc daemon chưa start | `sudo systemctl start docker` |
+| `Permission denied: /var/run/docker.sock` | User chưa trong group `docker` | `sudo usermod -aG docker $USER` rồi logout/login |
+| `Couldn't connect to localhost:7687` | testcontainers fail, bolt cũng fail | Xem lỗi testcontainers phía trên |
+| Pull image bị timeout | Mạng chậm | Thử lại, hoặc `docker pull neo4j:5` trước |
+
+Unit tests (`make test`) không bị ảnh hưởng bởi Docker và luôn chạy được.
 
 ---
 
