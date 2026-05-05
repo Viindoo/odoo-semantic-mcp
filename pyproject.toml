@@ -28,6 +28,9 @@ markers = [
     "neo4j: integration tests yêu cầu Neo4j đang chạy (skip bằng -m 'not neo4j')",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
