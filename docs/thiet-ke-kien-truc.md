@@ -242,14 +242,14 @@ Topological sort (Kahn's algorithm) đảm bảo base modules được index tr�
 
 // Lớp Model
 (:Model)-[:DEFINED_IN]->(:Module)
-(:Model)-[:INHERITS    { priority }]->(:Model)       // _inherit
+(:Model)-[:INHERITS]->(:Model)                       // _inherit  (priority: planned, chưa set ở M1)
 (:Model)-[:DELEGATES_TO { via_field }]->(:Model)     // _inherits
 
 // Lớp Field / Method
 (:Field )-[:BELONGS_TO]->(:Model)
-(:Field )-[:EXTENDS   ]->(:Field)                    // field override chain
+(:Field )-[:EXTENDS   ]->(:Field)                    // field override chain  (planned, chưa có ở M1)
 (:Method)-[:BELONGS_TO]->(:Model)
-(:Method)-[:OVERRIDES  { has_super: bool }]->(:Method)
+(:Method)-[:OVERRIDES  { has_super: bool }]->(:Method)  // (planned, chưa có ở M1)
 
 // Lớp View / QWeb
 (:View    )-[:DEFINED_IN   ]->(:Module)
@@ -274,7 +274,7 @@ Resolve tất cả module-scoped nodes của `sale.order` trong 17.0 (C1 schema)
 // Lấy tất cả nodes theo thứ tự base→extension (ít inbound INHERITS nhất = base)
 MATCH (m:Model {name: 'sale.order', odoo_version: '17.0'})-[:DEFINED_IN]->(mod:Module)
 RETURN m.module AS module_name, mod.repo AS repo,
-       size(()-[:INHERITS]->(m)) AS depth
+       COUNT { ()-[:INHERITS]->(m) } AS depth
 ORDER BY depth ASC
 ```
 
@@ -400,7 +400,7 @@ usage_log (id, key_id, tool, odoo_version, latency_ms, ts)
 ```
 odoo-semantic-mcp/
 ├── docker-compose.yml      -- Neo4j + PostgreSQL + MCP server + Web UI
-├── .env.example            -- NEO4J_PASSWORD, PG_DSN, API_MASTER_KEY
+├── .env.example            -- NEO4J_IMAGE, NEO4J_PASSWORD, PG_DSN, API_MASTER_KEY
 ├── install.sh              -- cài đặt không dùng Docker
 └── cli/
     ├── index.py            -- odoo-semantic index --base-dir ~/git --version 17.0
