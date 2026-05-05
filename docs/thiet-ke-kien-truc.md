@@ -203,9 +203,13 @@ Topological sort (Kahn's algorithm) đảm bảo base modules được index tr�
 
 ```
 (:Module   { name, odoo_version, repo, path, version_raw })
-(:Model    { name, odoo_version, module, is_abstract, is_transient })
-(:Field    { name, odoo_version, ttype, related, compute, stored, required })
-(:Method   { name, odoo_version, is_override, has_super_call })
+(:Model    { name, module, odoo_version, is_abstract, is_transient })
+           // KEY = (name, module, odoo_version) — N nodes cho cùng model name
+           // mỗi module define/extend model đó có 1 node riêng
+(:Field    { name, model, module, odoo_version, ttype, related, compute, stored, required })
+           // KEY = (name, model, module, odoo_version)
+(:Method   { name, model, module, odoo_version, has_super_call, decorators })
+           // KEY = (name, model, module, odoo_version)
 (:View     { xmlid, odoo_version, type, mode })     // mode: primary | extension
 (:QWebTmpl { xmlid, odoo_version, module })
 (:JSPatch  { target, patch_name, odoo_version, module, era })
@@ -247,22 +251,31 @@ Topological sort (Kahn's algorithm) đảm bảo base modules được index tr�
 
 #### Ví dụ query Cypher
 
-Resolve full inheritance chain của `sale.order` trong 17.0:
+Resolve tất cả module-scoped nodes của `sale.order` trong 17.0 (C1 schema):
 
 ```cypher
-MATCH path = (m:Model {name: 'sale.order', odoo_version: '17.0'})
-             -[:INHERITS*]->(:Model)
+// Lấy tất cả nodes theo thứ tự base→extension (ít inbound INHERITS nhất = base)
+MATCH (m:Model {name: 'sale.order', odoo_version: '17.0'})-[:DEFINED_IN]->(mod:Module)
+RETURN m.module AS module_name, mod.repo AS repo,
+       size(()-[:INHERITS]->(m)) AS depth
+ORDER BY depth ASC
+```
+
+Lấy toàn bộ INHERITS chain (bao gồm cross-name mixins):
+
+```cypher
+MATCH path = (:Model {name: 'sale.order', odoo_version: '17.0'})
+             -[:INHERITS*]->(:Model {odoo_version: '17.0'})
 RETURN path
 ```
 
-Impact analysis khi đổi field `amount_total`:
+Impact analysis khi đổi field `amount_total` (M1 scope, full version Milestone 4):
 
 ```cypher
-MATCH (f:Field {name: 'amount_total', odoo_version: '17.0'})
-      <-[:EXTENDS*0..]-(ext:Field)
+MATCH (f:Field {name: 'amount_total', model: 'sale.order', odoo_version: '17.0'})
       <-[:BELONGS_TO]-(m:Model)
       <-[:TARGETS_MODEL]-(v:View)
-RETURN f, ext, m, v
+RETURN f, m, v
 ```
 
 ---

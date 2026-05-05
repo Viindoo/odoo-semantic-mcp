@@ -70,9 +70,9 @@ services:
     volumes:
       - neo4j_data:/data
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7474"]
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p $${NEO4J_PASSWORD:-password} 'RETURN 1' || exit 1"]
       interval: 10s
-      retries: 5
+      retries: 10
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -124,8 +124,8 @@ name = "odoo-semantic-mcp"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "fastmcp>=2.0",
-    "neo4j>=5.0",
+    "fastmcp>=2.3,<3.0",
+    "neo4j>=5.0,<6.0",
     "psycopg2-binary>=2.9",
     "python-dotenv>=1.0",
 ]
@@ -134,11 +134,22 @@ dependencies = [
 dev = [
     "pytest>=7.4",
     "pytest-asyncio>=0.23",
+    "ruff>=0.4",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "neo4j: integration tests yêu cầu Neo4j đang chạy (skip bằng -m 'not neo4j')",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
 ```
 
 - [ ] **Bước 4: Tạo package init files**
@@ -164,9 +175,19 @@ NEO4J_PASSWORD = os.getenv("NEO4J_TEST_PASSWORD", "password")
 TEST_VERSION = "99.0"  # version riêng cho test, không ảnh hưởng data thật
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "neo4j: yêu cầu Neo4j đang chạy")
+
+
 @pytest.fixture(scope="session")
 def neo4j_driver():
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    """Kết nối Neo4j. Skip toàn bộ test neo4j nếu không kết nối được."""
+    try:
+        from neo4j import GraphDatabase
+        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        driver.verify_connectivity()
+    except Exception as e:
+        pytest.skip(f"Neo4j không sẵn sàng ({e}) — chạy 'docker compose up -d neo4j' để enable")
     yield driver
     driver.close()
 
@@ -627,13 +648,17 @@ from .scanner import get_git_branch, is_odoo_version_branch
 
 
 def parse_manifest(manifest_path: str) -> dict:
-    """Đọc __manifest__.py và trả về dict. Trả về {} nếu có lỗi."""
+    """Đọc __manifest__.py và trả về dict. Trả về {} nếu có lỗi.
+
+    Chỉ duyệt tree.body (top-level statements) thay vì ast.walk toàn cây,
+    tránh bắt nhầm nested dict như 'external_dependencies', 'assets', v.v.
+    """
     try:
         source = Path(manifest_path).read_text(encoding='utf-8', errors='ignore')
         tree = ast.parse(source)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Dict):
-                return ast.literal_eval(node.value)
+        for stmt in tree.body:
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Dict):
+                return ast.literal_eval(stmt.value)
     except Exception:
         pass
     return {}
@@ -1232,11 +1257,11 @@ def _parse_class(cls_node: ast.ClassDef, module_info: ModuleInfo) -> ModelInfo |
                 related = _extract_string(kwargs['related']) if 'related' in kwargs else None
                 compute = _extract_string(kwargs['compute']) if 'compute' in kwargs else None
                 required = bool(getattr(kwargs.get('required'), 'value', False))
-                # store kwarg: nếu không có thì computed=False → not stored, else True
+                # store kwarg: computed và related fields mặc định store=False
                 if 'store' in kwargs:
                     stored = bool(getattr(kwargs['store'], 'value', True))
                 else:
-                    stored = compute is None  # computed fields mặc định store=False
+                    stored = (compute is None and related is None)
 
                 fields_list.append(FieldInfo(
                     name=field_name, ttype=field_type,
@@ -1260,8 +1285,9 @@ def _parse_class(cls_node: ast.ClassDef, module_info: ModuleInfo) -> ModelInfo |
                 decorators=decorators,
             ))
 
-    # _inherit dạng single string → model name = inherit name
-    if not name and len(inherit) == 1:
+    # _inherit mà không có _name → name = inherit[0] (Odoo convention)
+    # Áp dụng cả khi inherit có nhiều phần tử: ['sale.order', 'mail.thread']
+    if not name and inherit:
         name = inherit[0]
 
     # Không phải Odoo model nếu không có _name và không phải Model subclass
@@ -1305,10 +1331,12 @@ def parse_module(module_info: ModuleInfo) -> ParseResult:
     result = ParseResult(module=module_info)
     module_path = Path(module_info.path)
 
+    SKIP_DIRS = {'.git', 'static', 'migrations', 'tests', '__pycache__'}
+
     for py_file in sorted(module_path.rglob('*.py')):
         if py_file.name == '__manifest__.py':
             continue
-        if '.git' in py_file.parts:
+        if SKIP_DIRS & set(py_file.parts):
             continue
         models = parse_file(str(py_file), module_info)
         result.models.extend(models)
@@ -1349,6 +1377,8 @@ import pytest
 from tests.conftest import TEST_VERSION
 from src.indexer.models import ModuleInfo, ModelInfo, FieldInfo, MethodInfo, ParseResult
 from src.indexer.writer_neo4j import Neo4jWriter
+
+pytestmark = pytest.mark.neo4j
 
 
 @pytest.fixture
@@ -1437,6 +1467,8 @@ def test_write_method_node(writer, clean_neo4j):
 
 
 def test_write_inherits_edge(writer, clean_neo4j):
+    # base_mod định nghĩa sale.order, ext_mod extend nó (_inherit = 'sale.order')
+    # Expected: (:Model {name:'sale.order', module:'ext_mod'})-[:INHERITS]->(:Model {name:'sale.order', module:'base_mod'})
     base_module = ModuleInfo(
         name="base_mod", odoo_version=TEST_VERSION,
         repo="base_repo", path="/tmp", depends=[], version_raw="",
@@ -1452,6 +1484,7 @@ def test_write_inherits_edge(writer, clean_neo4j):
         name="sale.order", module="ext_mod", odoo_version=TEST_VERSION,
         inherit=["sale.order"],
     )
+    # Write base trước (topo-order), rồi extension
     writer.write_results([
         ParseResult(module=base_module, models=[base_model]),
         ParseResult(module=ext_module, models=[ext_model]),
@@ -1459,11 +1492,11 @@ def test_write_inherits_edge(writer, clean_neo4j):
 
     with clean_neo4j.session() as session:
         rec = session.run("""
-            MATCH (child:Model {name: 'sale.order', odoo_version: $v})
-                  -[:INHERITS]->(parent:Model {name: 'sale.order', odoo_version: $v})
-            RETURN count(*) as cnt
+            MATCH (ext:Model {name: 'sale.order', module: 'ext_mod', odoo_version: $v})
+                  -[:INHERITS]->(base:Model {name: 'sale.order', module: 'base_mod', odoo_version: $v})
+            RETURN count(*) AS cnt
         """, v=TEST_VERSION).single()
-    assert rec["cnt"] >= 1
+    assert rec["cnt"] == 1
 
 
 def test_write_delegates_to_edge(writer, clean_neo4j):
@@ -1530,12 +1563,14 @@ def _write_parse_result(tx, result: ParseResult) -> None:
         """, name=module.name, v=module.odoo_version, dep=dep)
 
     for model in result.models:
-        # Model node + DEFINED_IN edge
+        # Model node key: (name, module, odoo_version) — mỗi module tạo 1 node riêng.
+        # Đây là quyết định schema C1: N nodes per model name, không phải 1 node.
+        # Lý do: cần phân biệt "sale.order được định nghĩa trong sale" vs
+        # "sale.order được extend trong viin_sale" → 2 node khác nhau.
         tx.run("""
             MERGE (mod:Module {name: $module_name, odoo_version: $v})
-            MERGE (m:Model {name: $name, odoo_version: $v})
-            SET m.module = $module_name,
-                m.is_abstract = $is_abstract,
+            MERGE (m:Model {name: $name, module: $module_name, odoo_version: $v})
+            SET m.is_abstract = $is_abstract,
                 m.is_transient = $is_transient
             MERGE (m)-[:DEFINED_IN]->(mod)
         """, name=model.name, v=model.odoo_version,
@@ -1543,46 +1578,59 @@ def _write_parse_result(tx, result: ParseResult) -> None:
              is_abstract=model.is_abstract,
              is_transient=model.is_transient)
 
-        # INHERITS edges
+        # INHERITS edges — 2 loại:
         for parent_name in model.inherit:
             if parent_name == model.name:
-                continue  # skip self-reference
-            tx.run("""
-                MATCH (child:Model {name: $name, odoo_version: $v})
-                MERGE (parent:Model {name: $parent, odoo_version: $v})
-                MERGE (child)-[:INHERITS]->(parent)
-            """, name=model.name, v=model.odoo_version, parent=parent_name)
+                # Override chain (cùng tên): liên kết với "tip" — node cùng tên
+                # chưa bị node nào khác inherit đến. Topo-sort đảm bảo base đã tồn tại.
+                tx.run("""
+                    MATCH (ext:Model {name: $name, module: $mod, odoo_version: $v})
+                    MATCH (tip:Model {name: $name, odoo_version: $v})
+                    WHERE tip.module <> $mod
+                      AND NOT (:Model {name: $name, odoo_version: $v})-[:INHERITS]->(tip)
+                    MERGE (ext)-[:INHERITS]->(tip)
+                """, name=model.name, mod=model.module, v=model.odoo_version)
+            else:
+                # Mixin / base khác tên (mail.thread, etc.)
+                tx.run("""
+                    MATCH (m:Model {name: $model_name, module: $mod, odoo_version: $v})
+                    MATCH (parent:Model {name: $parent_name, odoo_version: $v})
+                    MERGE (m)-[:INHERITS]->(parent)
+                """, model_name=model.name, mod=model.module,
+                     v=model.odoo_version, parent_name=parent_name)
 
         # DELEGATES_TO edges
         for delegated_model, via_field in model.inherits.items():
             tx.run("""
-                MATCH (m:Model {name: $name, odoo_version: $v})
-                MERGE (d:Model {name: $delegated, odoo_version: $v})
+                MATCH (m:Model {name: $name, module: $mod, odoo_version: $v})
+                MATCH (d:Model {name: $delegated, odoo_version: $v})
                 MERGE (m)-[:DELEGATES_TO {via_field: $via_field}]->(d)
-            """, name=model.name, v=model.odoo_version,
+            """, name=model.name, mod=model.module, v=model.odoo_version,
                  delegated=delegated_model, via_field=via_field)
 
-        # Field nodes + BELONGS_TO edges
+        # Field nodes key: (name, model, module, odoo_version) — giữ field của mỗi module riêng
         for fld in model.fields:
             tx.run("""
-                MATCH (m:Model {name: $model_name, odoo_version: $v})
-                MERGE (f:Field {name: $name, model: $model_name, odoo_version: $v})
+                MATCH (m:Model {name: $model_name, module: $mod, odoo_version: $v})
+                MERGE (f:Field {name: $name, model: $model_name,
+                               module: $mod, odoo_version: $v})
                 SET f.ttype = $ttype, f.related = $related, f.compute = $compute,
                     f.stored = $stored, f.required = $required
                 MERGE (f)-[:BELONGS_TO]->(m)
-            """, model_name=model.name, v=model.odoo_version,
+            """, model_name=model.name, mod=model.module, v=model.odoo_version,
                  name=fld.name, ttype=fld.ttype, related=fld.related,
                  compute=fld.compute, stored=fld.stored, required=fld.required)
 
-        # Method nodes + BELONGS_TO edges
+        # Method nodes key: (name, model, module, odoo_version)
         for mth in model.methods:
             tx.run("""
-                MATCH (m:Model {name: $model_name, odoo_version: $v})
-                MERGE (mth:Method {name: $name, model: $model_name, odoo_version: $v})
+                MATCH (m:Model {name: $model_name, module: $mod, odoo_version: $v})
+                MERGE (mth:Method {name: $name, model: $model_name,
+                                   module: $mod, odoo_version: $v})
                 SET mth.has_super_call = $has_super_call,
                     mth.decorators = $decorators
                 MERGE (mth)-[:BELONGS_TO]->(m)
-            """, model_name=model.name, v=model.odoo_version,
+            """, model_name=model.name, mod=model.module, v=model.odoo_version,
                  name=mth.name, has_super_call=mth.has_super_call,
                  decorators=mth.decorators)
 
@@ -1598,9 +1646,9 @@ class Neo4jWriter:
         with self.driver.session() as session:
             for stmt in [
                 "CREATE INDEX IF NOT EXISTS FOR (n:Module) ON (n.name, n.odoo_version)",
-                "CREATE INDEX IF NOT EXISTS FOR (n:Model)  ON (n.name, n.odoo_version)",
-                "CREATE INDEX IF NOT EXISTS FOR (n:Field)  ON (n.name, n.model, n.odoo_version)",
-                "CREATE INDEX IF NOT EXISTS FOR (n:Method) ON (n.name, n.model, n.odoo_version)",
+                "CREATE INDEX IF NOT EXISTS FOR (n:Model)  ON (n.name, n.module, n.odoo_version)",
+                "CREATE INDEX IF NOT EXISTS FOR (n:Field)  ON (n.name, n.model, n.module, n.odoo_version)",
+                "CREATE INDEX IF NOT EXISTS FOR (n:Method) ON (n.name, n.model, n.module, n.odoo_version)",
             ]:
                 session.run(stmt)
 
@@ -1644,6 +1692,8 @@ import pytest
 from tests.conftest import TEST_VERSION
 from src.indexer.models import ModuleInfo, ModelInfo, FieldInfo, MethodInfo, ParseResult
 from src.indexer.writer_neo4j import Neo4jWriter
+
+pytestmark = pytest.mark.neo4j
 
 
 @pytest.fixture(scope="module")
@@ -1784,9 +1834,12 @@ def _get_driver():
 
 
 def _latest_version(session) -> str:
-    rec = session.run(
-        "MATCH (m:Model) RETURN m.odoo_version AS v ORDER BY v DESC LIMIT 1"
-    ).single()
+    # Dùng toFloat() để sort đúng: "17.0" > "9.0" (lexicographic thì "9.0" > "17.0")
+    rec = session.run("""
+        MATCH (m:Model)
+        WITH DISTINCT m.odoo_version AS v
+        RETURN v ORDER BY toFloat(v) DESC LIMIT 1
+    """).single()
     return rec["v"] if rec else "17.0"
 
 
@@ -1804,30 +1857,27 @@ def resolve_model(model_name: str, odoo_version: str = "auto") -> str:
         if odoo_version == "auto":
             odoo_version = _latest_version(session)
 
-        rec = session.run("""
-            MATCH (m:Model {name: $name, odoo_version: $v})
-            OPTIONAL MATCH (m)-[:DEFINED_IN]->(mod:Module)
-            RETURN m, mod.name AS module_name, mod.repo AS repo
-        """, name=model_name, v=odoo_version).single()
-
-        if not rec:
-            return f"Không tìm thấy model '{model_name}' trong Odoo {odoo_version}."
-
-        chain = session.run("""
-            MATCH (m:Model {name: $name, odoo_version: $v})-[:INHERITS*]->(p:Model)
-            OPTIONAL MATCH (p)-[:DEFINED_IN]->(mod:Module)
-            RETURN p.name AS pname, mod.name AS module_name, mod.repo AS repo
+        # Lấy tất cả module-scoped nodes của model (schema C1: N nodes per model name)
+        # Order by số inbound INHERITS tăng dần → base (ít inbound) đứng trước
+        layers = session.run("""
+            MATCH (m:Model {name: $name, odoo_version: $v})-[:DEFINED_IN]->(mod:Module)
+            RETURN m.module AS module_name, mod.repo AS repo
+            ORDER BY size(()-[:INHERITS]->(m)) ASC
         """, name=model_name, v=odoo_version).data()
 
-        extenders = session.run("""
-            MATCH (child:Model {name: $name, odoo_version: $v})
-                  -[:DEFINED_IN]->(mod:Module)
-            WHERE mod.name <> $base_module
-            OPTIONAL MATCH (child)-[:BELONGS_TO|DEFINED_IN*1..2]-(f:Field)
-                           WHERE f.module <> $base_module
-            RETURN mod.name AS module_name, mod.repo AS repo
-        """, name=model_name, v=odoo_version,
-             base_module=rec["module_name"]).data()
+        if not layers:
+            return f"Không tìm thấy model '{model_name}' trong Odoo {odoo_version}."
+
+        base = layers[0]
+        extensions = layers[1:]
+
+        # Mixin parents khác tên (mail.thread, account.move.mixin, ...)
+        parents = session.run("""
+            MATCH (:Model {name: $name, odoo_version: $v})-[:INHERITS]->(p:Model)
+            WHERE p.name <> $name
+            OPTIONAL MATCH (p)-[:DEFINED_IN]->(mod:Module)
+            RETURN DISTINCT p.name AS pname, mod.name AS module_name
+        """, name=model_name, v=odoo_version).data()
 
         fields_count = session.run(
             "MATCH (f:Field {model: $n, odoo_version: $v}) RETURN count(f) AS c",
@@ -1840,15 +1890,15 @@ def resolve_model(model_name: str, odoo_version: str = "auto") -> str:
         ).single()["c"]
 
     lines = [f"{model_name} (Odoo {odoo_version})"]
-    lines.append(f"├─ Định nghĩa tại: [{rec['repo']}] {rec['module_name']}")
+    lines.append(f"├─ Định nghĩa tại: [{base['repo']}] {base['module_name']}")
 
-    if chain:
-        parents_str = ", ".join(p["pname"] for p in chain)
+    if parents:
+        parents_str = ", ".join(p["pname"] for p in parents)
         lines.append(f"├─ Kế thừa từ:    {parents_str}")
 
-    if extenders:
+    if extensions:
         lines.append("├─ Mở rộng bởi:")
-        for ext in extenders:
+        for ext in extensions:
             lines.append(f"│   └─ [{ext['repo']}] {ext['module_name']}")
 
     lines.append(f"├─ Tổng số field:  {fields_count}")
@@ -1870,26 +1920,34 @@ def resolve_field(model_name: str, field_name: str, odoo_version: str = "auto") 
         if odoo_version == "auto":
             odoo_version = _latest_version(session)
 
-        rec = session.run("""
+        # Schema C1: Field key = (name, model, module, odoo_version) — N nodes cho cùng field
+        # dùng f.module trực tiếp, tra Module bằng {name, odoo_version}
+        records = session.run("""
             MATCH (f:Field {name: $fn, model: $mn, odoo_version: $v})
-            OPTIONAL MATCH (f)-[:BELONGS_TO]->(m:Model)-[:DEFINED_IN]->(mod:Module)
-            RETURN f, mod.name AS module_name, mod.repo AS repo
-        """, fn=field_name, mn=model_name, v=odoo_version).single()
+            OPTIONAL MATCH (mod:Module {name: f.module, odoo_version: $v})
+            OPTIONAL MATCH (m_node:Model {name: $mn, module: f.module, odoo_version: $v})
+            RETURN f, f.module AS module_name, mod.repo AS repo,
+                   size(()-[:INHERITS]->(m_node)) AS depth
+            ORDER BY depth ASC
+        """, fn=field_name, mn=model_name, v=odoo_version).data()
 
-    if not rec:
+    if not records:
         return f"Không tìm thấy field '{field_name}' trên model '{model_name}' trong Odoo {odoo_version}."
 
-    f = rec["f"]
+    base_f = records[0]["f"]
     lines = [
         f"{model_name}.{field_name} (Odoo {odoo_version})",
-        f"├─ Loại:     {f.get('ttype', '?')}",
-        f"├─ Module:   [{rec['repo']}] {rec['module_name']}",
-        f"├─ Computed: {'Có' if f.get('compute') else 'Không'}"
-        + (f" ({f['compute']})" if f.get('compute') else ""),
-        f"├─ Stored:   {'Có' if f.get('stored', True) else 'Không'}",
-        f"├─ Required: {'Có' if f.get('required', False) else 'Không'}",
-        f"└─ Related:  {f.get('related') or '—'}",
+        f"├─ Loại:     {base_f.get('ttype', '?')}",
+        f"├─ Computed: {'Có' if base_f.get('compute') else 'Không'}"
+        + (f" ({base_f['compute']})" if base_f.get('compute') else ""),
+        f"├─ Stored:   {'Có' if base_f.get('stored', True) else 'Không'}",
+        f"├─ Required: {'Có' if base_f.get('required', False) else 'Không'}",
+        f"├─ Related:  {base_f.get('related') or '—'}",
+        f"└─ Khai báo trong:",
     ]
+    for r in records:
+        repo_str = f"[{r['repo']}] " if r.get("repo") else ""
+        lines.append(f"    └─ {repo_str}{r['module_name']}")
     return "\n".join(lines)
 
 
@@ -1907,10 +1965,15 @@ def resolve_method(model_name: str, method_name: str, odoo_version: str = "auto"
         if odoo_version == "auto":
             odoo_version = _latest_version(session)
 
+        # Schema C1: Method key = (name, model, module, odoo_version)
+        # dùng mth.module trực tiếp, tra Module bằng {name, odoo_version}
         records = session.run("""
             MATCH (mth:Method {name: $mn, model: $model, odoo_version: $v})
-            OPTIONAL MATCH (mth)-[:BELONGS_TO]->(m:Model)-[:DEFINED_IN]->(mod:Module)
-            RETURN mth, mod.name AS module_name, mod.repo AS repo
+            OPTIONAL MATCH (mod:Module {name: mth.module, odoo_version: $v})
+            OPTIONAL MATCH (m_node:Model {name: $model, module: mth.module, odoo_version: $v})
+            RETURN mth, mth.module AS module_name, mod.repo AS repo,
+                   size(()-[:INHERITS]->(m_node)) AS depth
+            ORDER BY depth ASC
         """, mn=method_name, model=model_name, v=odoo_version).data()
 
     if not records:
@@ -1926,6 +1989,7 @@ def resolve_method(model_name: str, method_name: str, odoo_version: str = "auto"
 
 
 if __name__ == "__main__":
+    # fastmcp >= 2.3: streamable-http transport. Verify params với `python -c "import fastmcp; help(fastmcp.FastMCP.run)"` khi implement.
     mcp.run(transport="streamable-http", host="0.0.0.0", port=8002, path="/mcp")
 ```
 
@@ -2065,6 +2129,101 @@ git commit -m "feat: E2E integration — indexer script + Claude Code connect"
 
 ---
 
+## Task 10: GitHub CI/CD — PR phải xanh trước khi merge
+
+**Files:**
+- Tạo: `.github/workflows/ci.yml`
+
+- [ ] **Bước 1: Viết failing test xác nhận marker neo4j hoạt động**
+
+```bash
+# Chạy chỉ unit tests (không cần Neo4j) — phải PASS ngay cả khi Neo4j không chạy
+pytest tests/ -v -m "not neo4j" --tb=short
+```
+
+Expected: Tất cả unit tests PASSED, integration tests bị skip.
+
+- [ ] **Bước 2: Tạo `.github/workflows/ci.yml`**
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ruff check src/ tests/
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v -m "not neo4j" --tb=short
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/password
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p password 'RETURN 1' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v -m "neo4j" --tb=short
+        env:
+          NEO4J_TEST_URI: bolt://localhost:7687
+          NEO4J_TEST_USER: neo4j
+          NEO4J_TEST_PASSWORD: password
+```
+
+- [ ] **Bước 3: Bật branch protection trên GitHub**
+
+Vào **Settings → Branches → Add branch protection rule** cho `main`/`master`:
+
+- ✅ Require status checks to pass before merging
+- Thêm checks: `lint`, `unit-tests`, `integration-tests`
+- ✅ Require branches to be up to date before merging
+- ✅ Do not allow bypassing the above settings
+
+- [ ] **Bước 4: Push để trigger CI lần đầu**
+
+```bash
+git add .github/workflows/ci.yml
+git commit -m "ci: add GitHub Actions — lint + unit + integration tests"
+git push
+```
+
+Expected: GitHub Actions chạy 3 jobs, tất cả xanh (✅).
+
+---
+
 ## Self-Review
 
 **Spec coverage check:**
@@ -2079,6 +2238,7 @@ git commit -m "feat: E2E integration — indexer script + Claude Code connect"
 | Neo4j: Module/Model/Field/Method nodes + edges | Task 7 |
 | MCP: resolve_model / resolve_field / resolve_method | Task 8 |
 | E2E test VS Code + Claude Code | Task 9 |
+| GitHub CI/CD — PR phải xanh trước merge | Task 10 |
 | docker-compose Neo4j + PostgreSQL | Task 1 |
 | Version-scoped: mọi node có `odoo_version` property | Task 7 |
 | Cross-repo inheritance chain | Task 7 + 9 |

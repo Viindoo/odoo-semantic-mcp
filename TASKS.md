@@ -22,6 +22,7 @@
 - [ ] `src/indexer/writer_neo4j.py`: Module/Model/Field/Method nodes + edges
 - [ ] `src/mcp/server.py`: `resolve_model` + `resolve_field` + `resolve_method`
 - [ ] E2E test: kết nối VS Code + Claude Code, verify kết quả
+- [ ] `.github/workflows/ci.yml`: lint + unit tests + integration tests (Neo4j service container)
 
 ## Milestone 2 — "View Wow"
 **Intent:** Mở rộng semantic awareness sang UI layer.  
