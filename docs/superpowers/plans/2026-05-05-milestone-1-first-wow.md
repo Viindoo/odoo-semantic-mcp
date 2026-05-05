@@ -126,7 +126,11 @@ ODOO_REPOS_BASE_DIR=/home/user/git
 MCP_HOST=0.0.0.0
 MCP_PORT=8002
 
-# ── TEST (pytest integration tests) ─────────────────────────────────���
+# ── DOCKER IMAGE VERSIONS (nguồn sự thật duy nhất) ──────────────────
+# Khi bump version: chỉ cần sửa ở đây — CI và docker-compose tự đọc.
+NEO4J_IMAGE=neo4j:5.26.25
+
+# ── TEST (pytest integration tests) ──────────────────────────────────
 NEO4J_TEST_URI=bolt://localhost:7687
 NEO4J_TEST_USER=neo4j
 NEO4J_TEST_PASSWORD=password
@@ -148,6 +152,7 @@ dependencies = [
     "neo4j>=5.0,<6.0",
     "psycopg2-binary>=2.9",
     "python-dotenv>=1.0",
+    "authlib<2.0",  # indirect via fastmcp; authlib.jose API breaks at 2.0
 ]
 
 [project.optional-dependencies]
@@ -155,6 +160,7 @@ dev = [
     "pytest>=7.4",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
+    "testcontainers[neo4j]>=4.13,<5.0",  # 5.0 may remove wait_container_is_ready API
 ]
 
 [tool.pytest.ini_options]
@@ -163,6 +169,9 @@ asyncio_mode = "auto"
 markers = [
     "neo4j: integration tests yêu cầu Neo4j đang chạy (skip bằng -m 'not neo4j')",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [tool.ruff]
 line-length = 100
@@ -184,74 +193,131 @@ touch src/__init__.py src/indexer/__init__.py src/mcp/__init__.py
 # tests/conftest.py
 import os
 import subprocess
-import pytest
 from pathlib import Path
+
+import pytest
 from neo4j import GraphDatabase
 
 NEO4J_URI = os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_TEST_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_TEST_PASSWORD", "password")
+TEST_VERSION = "99.0"  # version đặc biệt chỉ dùng cho tests, tránh conflict với data thật
 
-TEST_VERSION = "99.0"  # version riêng cho test, không ảnh hưởng data thật
-
-
-def pytest_configure(config):
-    config.addinivalue_line("markers", "neo4j: yêu cầu Neo4j đang chạy")
+_NEO4J_IMAGE = os.getenv("NEO4J_IMAGE", "neo4j:5.26.25")
 
 
 @pytest.fixture(scope="session")
 def neo4j_driver():
-    """Kết nối Neo4j. Skip toàn bộ test neo4j nếu không kết nối được."""
+    """
+    Kết nối Neo4j cho toàn bộ test session.
+
+    Ưu tiên 1: testcontainers — tự spin up Docker container, không cần setup thủ công.
+    Ưu tiên 2: kết nối trực tiếp tới NEO4J_TEST_URI (Neo4j đang chạy sẵn).
+    Fallback:  skip toàn bộ neo4j tests với lý do cụ thể từng tầng.
+    """
+    from testcontainers.core.wait_strategies import LogMessageWaitStrategy
+    from testcontainers.neo4j import Neo4jContainer
+
+    class _Neo4jContainer(Neo4jContainer):
+        """Override _connect() to prevent deprecated wait_for_logs runtime warning."""
+        def _connect(self) -> None:
+            with self.get_driver() as driver:
+                driver.verify_connectivity()
+
+    container = None
+    driver = None
+    tc_error = None
+
     try:
-        from neo4j import GraphDatabase
-        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        container = _Neo4jContainer(_NEO4J_IMAGE).waiting_for(
+            LogMessageWaitStrategy("Remote interface available at")
+        )
+        container.start()
+        bolt_url = container.get_connection_url()
+        driver = GraphDatabase.driver(bolt_url, auth=("neo4j", "password"))
         driver.verify_connectivity()
+        os.environ["NEO4J_TEST_URI"] = bolt_url
+        os.environ["NEO4J_TEST_USER"] = "neo4j"
+        os.environ["NEO4J_TEST_PASSWORD"] = "password"
     except Exception as e:
-        pytest.skip(f"Neo4j không sẵn sàng ({e}) — chạy 'docker compose up -d neo4j' để enable")
+        tc_error = e
+        if container is not None:
+            try:
+                container.stop()
+            except Exception:
+                pass
+        if driver is not None:
+            driver.close()
+        container = None
+        driver = None
+
+    if driver is None:
+        bolt_driver = None
+        try:
+            bolt_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+            bolt_driver.verify_connectivity()
+            driver = bolt_driver
+        except Exception as bolt_error:
+            if bolt_driver is not None:
+                bolt_driver.close()
+            lines = ["[FIX] Cài Docker + start daemon → testcontainers tự spin up Neo4j khi test chạy"]
+            lines.append(f"  testcontainers lỗi: {tc_error}" if tc_error else "  testcontainers: không thử được")
+            lines.append(f"  bolt ({NEO4J_URI}) lỗi: {bolt_error}")
+            lines.append("  Hoặc chạy thủ công: make neo4j-up")
+            pytest.skip("\n".join(lines))
+
     yield driver
+
     driver.close()
+    if container is not None:
+        container.stop()
 
 
 @pytest.fixture
 def clean_neo4j(neo4j_driver):
-    """Xóa test data trước và sau mỗi test."""
-    def cleanup():
-        with neo4j_driver.session() as session:
-            session.run("MATCH (n) WHERE n.odoo_version = $v DETACH DELETE n",
-                        v=TEST_VERSION)
-    cleanup()
+    """Xóa tất cả nodes có odoo_version=TEST_VERSION trước và sau mỗi test."""
+    with neo4j_driver.session() as session:
+        session.run("MATCH (n) WHERE n.odoo_version = $v DETACH DELETE n", v=TEST_VERSION)
     yield neo4j_driver
-    cleanup()
+    with neo4j_driver.session() as session:
+        session.run("MATCH (n) WHERE n.odoo_version = $v DETACH DELETE n", v=TEST_VERSION)
+
+
+@pytest.fixture
+def tmp_git_repo(tmp_path):
+    """Tạo một git repo tạm thời với branch 17.0 để test scanner."""
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "checkout", "-b", "17.0"],
+        check=True, capture_output=True,
+    )
+    return tmp_path
 
 
 def make_git_repo(path: Path, branch: str) -> Path:
-    """Tạo git repo với 1 commit trên branch chỉ định."""
+    """Tạo git repo tại path với branch đã cho. Dùng trong tests."""
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "checkout", "-b", branch],
-                   cwd=path, check=True, capture_output=True)
-    (path / "README.md").write_text("test repo")
-    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
-    subprocess.run([
-        "git", "-c", "user.email=test@test.com",
-        "-c", "user.name=Test", "commit", "-m", "init"
-    ], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(path), "checkout", "-b", branch],
+        check=True, capture_output=True,
+    )
     return path
 
 
-def make_manifest(module_dir: Path, name: str, version: str, depends: list[str],
-                  installable: bool = True) -> Path:
-    """Tạo __manifest__.py cho một module."""
+def make_manifest(
+    module_dir: Path,
+    name: str,
+    version: str,
+    depends: list,
+    installable: bool = True,
+) -> None:
+    """Tạo __manifest__.py trong module_dir. Dùng trong tests."""
     module_dir.mkdir(parents=True, exist_ok=True)
-    content = f"""{{
-    'name': '{name}',
-    'version': '{version}',
-    'depends': {depends!r},
-    'installable': {installable},
-}}
-"""
-    (module_dir / "__manifest__.py").write_text(content)
-    return module_dir
+    (module_dir / "__manifest__.py").write_text(
+        f"{{'name': {name!r}, 'version': {version!r}, "
+        f"'depends': {depends!r}, 'installable': {installable!r}}}\n"
+    )
 ```
 
 - [ ] **Bước 6: Khởi động services**
@@ -480,7 +546,7 @@ from pathlib import Path
 def get_git_branch(repo_path: str) -> str | None:
     """Trả về current branch name của git repo, hoặc None nếu không phải repo."""
     result = subprocess.run(
-        ["git", "-C", repo_path, "branch", "--show-current"],
+        ["git", "-C", repo_path, "symbolic-ref", "--short", "HEAD"],
         capture_output=True, text=True, timeout=10,
     )
     if result.returncode != 0:
@@ -1565,22 +1631,24 @@ Expected: `ModuleNotFoundError: No module named 'src.indexer.writer_neo4j'`
 
 ```python
 # src/indexer/writer_neo4j.py
+import logging
+
 from neo4j import GraphDatabase
 
-from .models import ParseResult, ModuleInfo
+from .models import ParseResult
+
+_logger = logging.getLogger(__name__)
 
 
 def _write_parse_result(tx, result: ParseResult) -> None:
     module = result.module
 
-    # Module node
     tx.run("""
         MERGE (m:Module {name: $name, odoo_version: $v})
         SET m.repo = $repo, m.path = $path, m.version_raw = $version_raw
     """, name=module.name, v=module.odoo_version,
          repo=module.repo, path=module.path, version_raw=module.version_raw)
 
-    # DEPENDS_ON edges
     for dep in module.depends:
         tx.run("""
             MATCH (m:Module {name: $name, odoo_version: $v})
@@ -1589,10 +1657,6 @@ def _write_parse_result(tx, result: ParseResult) -> None:
         """, name=module.name, v=module.odoo_version, dep=dep)
 
     for model in result.models:
-        # Model node key: (name, module, odoo_version) — mỗi module tạo 1 node riêng.
-        # Đây là quyết định schema C1: N nodes per model name, không phải 1 node.
-        # Lý do: cần phân biệt "sale.order được định nghĩa trong sale" vs
-        # "sale.order được extend trong viin_sale" → 2 node khác nhau.
         tx.run("""
             MERGE (mod:Module {name: $module_name, odoo_version: $v})
             MERGE (m:Model {name: $name, module: $module_name, odoo_version: $v})
@@ -1604,11 +1668,8 @@ def _write_parse_result(tx, result: ParseResult) -> None:
              is_abstract=model.is_abstract,
              is_transient=model.is_transient)
 
-        # INHERITS edges — 2 loại:
         for parent_name in model.inherit:
             if parent_name == model.name:
-                # Override chain (cùng tên): liên kết với "tip" — node cùng tên
-                # chưa bị node nào khác inherit đến. Topo-sort đảm bảo base đã tồn tại.
                 tx.run("""
                     MATCH (ext:Model {name: $name, module: $mod, odoo_version: $v})
                     MATCH (tip:Model {name: $name, odoo_version: $v})
@@ -1617,24 +1678,49 @@ def _write_parse_result(tx, result: ParseResult) -> None:
                     MERGE (ext)-[:INHERITS]->(tip)
                 """, name=model.name, mod=model.module, v=model.odoo_version)
             else:
-                # Mixin / base khác tên (mail.thread, etc.)
-                tx.run("""
+                rec = tx.run("""
                     MATCH (m:Model {name: $model_name, module: $mod, odoo_version: $v})
                     MATCH (parent:Model {name: $parent_name, odoo_version: $v})
                     MERGE (m)-[:INHERITS]->(parent)
+                    RETURN 1 AS ok
                 """, model_name=model.name, mod=model.module,
-                     v=model.odoo_version, parent_name=parent_name)
+                     v=model.odoo_version, parent_name=parent_name).single()
+                if rec is None:
+                    _logger.warning(
+                        "unresolved INHERITS: %s → %s (version %s) — parent model not indexed",
+                        model.name, parent_name, model.odoo_version,
+                    )
+                    tx.run("""
+                        MATCH (m:Model {name: $model_name, module: $mod, odoo_version: $v})
+                        MERGE (placeholder:Model {name: $parent_name,
+                                                  module: '__unresolved__', odoo_version: $v})
+                        ON CREATE SET placeholder.unresolved = true
+                        MERGE (m)-[:INHERITS {unresolved: true}]->(placeholder)
+                    """, model_name=model.name, mod=model.module,
+                         v=model.odoo_version, parent_name=parent_name)
 
-        # DELEGATES_TO edges
         for delegated_model, via_field in model.inherits.items():
-            tx.run("""
+            rec = tx.run("""
                 MATCH (m:Model {name: $name, module: $mod, odoo_version: $v})
                 MATCH (d:Model {name: $delegated, odoo_version: $v})
                 MERGE (m)-[:DELEGATES_TO {via_field: $via_field}]->(d)
+                RETURN 1 AS ok
             """, name=model.name, mod=model.module, v=model.odoo_version,
-                 delegated=delegated_model, via_field=via_field)
+                 delegated=delegated_model, via_field=via_field).single()
+            if rec is None:
+                _logger.warning(
+                    "unresolved DELEGATES_TO: %s → %s (version %s) — target model not indexed",
+                    model.name, delegated_model, model.odoo_version,
+                )
+                tx.run("""
+                    MATCH (m:Model {name: $name, module: $mod, odoo_version: $v})
+                    MERGE (placeholder:Model {name: $delegated,
+                                              module: '__unresolved__', odoo_version: $v})
+                    ON CREATE SET placeholder.unresolved = true
+                    MERGE (m)-[:DELEGATES_TO {via_field: $via_field, unresolved: true}]->(placeholder)
+                """, name=model.name, mod=model.module, v=model.odoo_version,
+                     delegated=delegated_model, via_field=via_field)
 
-        # Field nodes key: (name, model, module, odoo_version) — giữ field của mỗi module riêng
         for fld in model.fields:
             tx.run("""
                 MATCH (m:Model {name: $model_name, module: $mod, odoo_version: $v})
@@ -1647,7 +1733,6 @@ def _write_parse_result(tx, result: ParseResult) -> None:
                  name=fld.name, ttype=fld.ttype, related=fld.related,
                  compute=fld.compute, stored=fld.stored, required=fld.required)
 
-        # Method nodes key: (name, model, module, odoo_version)
         for mth in model.methods:
             tx.run("""
                 MATCH (m:Model {name: $model_name, module: $mod, odoo_version: $v})
@@ -1774,8 +1859,6 @@ def mcp_tools(seeded_neo4j):
     from src.mcp.server import _resolve_model, _resolve_field, _resolve_method
     return _resolve_model, _resolve_field, _resolve_method
 
-> **Note (post-M1 fix):** FastMCP 2.x `@mcp.tool()` wraps functions into `FunctionTool` objects — not directly callable. Business logic lives in `_resolve_model/field/method` (underscore prefix). Tests import those.
-
 
 def test_resolve_model_found(mcp_tools):
     _resolve_model, _, _ = mcp_tools
@@ -1827,6 +1910,8 @@ def test_resolve_method_not_found(mcp_tools):
     assert "Không tìm thấy" in result
 ```
 
+> **Note:** FastMCP 2.x `@mcp.tool()` wraps functions into `FunctionTool` objects — not directly callable. Business logic lives in `_resolve_model/field/method` (underscore prefix). Tests import those. Cũng cần `sys.modules.pop("src.mcp.server", None)` trước khi import để reload env vars.
+
 - [ ] **Bước 2: Chạy test — xác nhận FAIL**
 
 ```bash
@@ -1840,6 +1925,7 @@ Expected: `ModuleNotFoundError: No module named 'src.mcp.server'`
 ```python
 # src/mcp/server.py
 import os
+
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from neo4j import GraphDatabase
@@ -1862,35 +1948,23 @@ def _get_driver():
 
 
 def _latest_version(session) -> str:
-    # Dùng toFloat() để sort đúng: "17.0" > "9.0" (lexicographic thì "9.0" > "17.0")
     rec = session.run("""
-        MATCH (m:Model)
+        MATCH (m:Module)
         WITH DISTINCT m.odoo_version AS v
         RETURN v ORDER BY toFloat(v) DESC LIMIT 1
     """).single()
     return rec["v"] if rec else "17.0"
 
 
-@mcp.tool()
-def resolve_model(model_name: str, odoo_version: str = "auto") -> str:
-    """
-    Trả về thông tin đầy đủ về Odoo model: inheritance chain,
-    delegated models, field summary, method summary.
-
-    Args:
-        model_name:   Tên model, ví dụ 'sale.order', 'account.move'.
-        odoo_version: Phiên bản Odoo, ví dụ '17.0'. Mặc định: version mới nhất.
-    """
+def _resolve_model(model_name: str, odoo_version: str = "auto") -> str:
     with _get_driver().session() as session:
         if odoo_version == "auto":
             odoo_version = _latest_version(session)
 
-        # Lấy tất cả module-scoped nodes của model (schema C1: N nodes per model name)
-        # Order by số inbound INHERITS tăng dần → base (ít inbound) đứng trước
         layers = session.run("""
             MATCH (m:Model {name: $name, odoo_version: $v})-[:DEFINED_IN]->(mod:Module)
             RETURN m.module AS module_name, mod.repo AS repo
-            ORDER BY size(()-[:INHERITS]->(m)) ASC
+            ORDER BY COUNT { ()-[:INHERITS]->(m) } ASC
         """, name=model_name, v=odoo_version).data()
 
         if not layers:
@@ -1899,10 +1973,10 @@ def resolve_model(model_name: str, odoo_version: str = "auto") -> str:
         base = layers[0]
         extensions = layers[1:]
 
-        # Mixin parents khác tên (mail.thread, account.move.mixin, ...)
         parents = session.run("""
-            MATCH (:Model {name: $name, odoo_version: $v})-[:INHERITS]->(p:Model)
+            MATCH (:Model {name: $name, odoo_version: $v})-[r:INHERITS]->(p:Model)
             WHERE p.name <> $name
+              AND NOT coalesce(r.unresolved, false)
             OPTIONAL MATCH (p)-[:DEFINED_IN]->(mod:Module)
             RETURN DISTINCT p.name AS pname, mod.name AS module_name
         """, name=model_name, v=odoo_version).data()
@@ -1934,28 +2008,17 @@ def resolve_model(model_name: str, odoo_version: str = "auto") -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
-def resolve_field(model_name: str, field_name: str, odoo_version: str = "auto") -> str:
-    """
-    Trả về chi tiết một field: type, computed/related metadata, module nguồn.
-
-    Args:
-        model_name:   Tên model chứa field.
-        field_name:   Tên field, ví dụ 'amount_total', 'partner_id'.
-        odoo_version: Phiên bản Odoo. Mặc định: version mới nhất.
-    """
+def _resolve_field(model_name: str, field_name: str, odoo_version: str = "auto") -> str:
     with _get_driver().session() as session:
         if odoo_version == "auto":
             odoo_version = _latest_version(session)
 
-        # Schema C1: Field key = (name, model, module, odoo_version) — N nodes cho cùng field
-        # dùng f.module trực tiếp, tra Module bằng {name, odoo_version}
         records = session.run("""
             MATCH (f:Field {name: $fn, model: $mn, odoo_version: $v})
             OPTIONAL MATCH (mod:Module {name: f.module, odoo_version: $v})
             OPTIONAL MATCH (m_node:Model {name: $mn, module: f.module, odoo_version: $v})
             RETURN f, f.module AS module_name, mod.repo AS repo,
-                   size(()-[:INHERITS]->(m_node)) AS depth
+                   COUNT { ()-[:INHERITS]->(m_node) } AS depth
             ORDER BY depth ASC
         """, fn=field_name, mn=model_name, v=odoo_version).data()
 
@@ -1971,7 +2034,7 @@ def resolve_field(model_name: str, field_name: str, odoo_version: str = "auto") 
         f"├─ Stored:   {'Có' if base_f.get('stored', True) else 'Không'}",
         f"├─ Required: {'Có' if base_f.get('required', False) else 'Không'}",
         f"├─ Related:  {base_f.get('related') or '—'}",
-        f"└─ Khai báo trong:",
+        "└─ Khai báo trong:",
     ]
     for r in records:
         repo_str = f"[{r['repo']}] " if r.get("repo") else ""
@@ -1979,28 +2042,17 @@ def resolve_field(model_name: str, field_name: str, odoo_version: str = "auto") 
     return "\n".join(lines)
 
 
-@mcp.tool()
-def resolve_method(model_name: str, method_name: str, odoo_version: str = "auto") -> str:
-    """
-    Trả về override chain của một method theo thứ tự base→top.
-
-    Args:
-        model_name:   Tên model chứa method.
-        method_name:  Tên method, ví dụ 'action_confirm', '_compute_amount'.
-        odoo_version: Phiên bản Odoo. Mặc định: version mới nhất.
-    """
+def _resolve_method(model_name: str, method_name: str, odoo_version: str = "auto") -> str:
     with _get_driver().session() as session:
         if odoo_version == "auto":
             odoo_version = _latest_version(session)
 
-        # Schema C1: Method key = (name, model, module, odoo_version)
-        # dùng mth.module trực tiếp, tra Module bằng {name, odoo_version}
         records = session.run("""
             MATCH (mth:Method {name: $mn, model: $model, odoo_version: $v})
             OPTIONAL MATCH (mod:Module {name: mth.module, odoo_version: $v})
             OPTIONAL MATCH (m_node:Model {name: $model, module: mth.module, odoo_version: $v})
             RETURN mth, mth.module AS module_name, mod.repo AS repo,
-                   size(()-[:INHERITS]->(m_node)) AS depth
+                   COUNT { ()-[:INHERITS]->(m_node) } AS depth
             ORDER BY depth ASC
         """, mn=method_name, model=model_name, v=odoo_version).data()
 
@@ -2012,12 +2064,30 @@ def resolve_method(model_name: str, method_name: str, odoo_version: str = "auto"
         mth = r["mth"]
         super_info = "✓ gọi super()" if mth.get("has_super_call") else "✗ không gọi super()"
         decs = ", ".join(mth.get("decorators") or []) or "—"
-        lines.append(f"  [{r['repo']}] {r['module_name']} — {super_info} — decorators: {decs}")
+        repo_str = f"[{r['repo']}] " if r.get("repo") else ""
+        lines.append(f"  {repo_str}{r['module_name']} — {super_info} — decorators: {decs}")
     return "\n".join(lines)
 
 
+@mcp.tool()
+def resolve_model(model_name: str, odoo_version: str = "auto") -> str:
+    """Trả về thông tin đầy đủ về Odoo model: inheritance chain, field summary, method summary."""
+    return _resolve_model(model_name, odoo_version)
+
+
+@mcp.tool()
+def resolve_field(model_name: str, field_name: str, odoo_version: str = "auto") -> str:
+    """Trả về chi tiết một field: type, computed/related metadata, module nguồn."""
+    return _resolve_field(model_name, field_name, odoo_version)
+
+
+@mcp.tool()
+def resolve_method(model_name: str, method_name: str, odoo_version: str = "auto") -> str:
+    """Trả về override chain của một method theo thứ tự base→top."""
+    return _resolve_method(model_name, method_name, odoo_version)
+
+
 if __name__ == "__main__":
-    # fastmcp >= 2.3: streamable-http transport. Verify params với `python -c "import fastmcp; help(fastmcp.FastMCP.run)"` khi implement.
     mcp.run(transport="streamable-http", host="0.0.0.0", port=8002, path="/mcp")
 ```
 
