@@ -46,6 +46,9 @@ Odoo repos (~/git/*_17.0/)
 | `find_examples` | Code examples từ codebase theo ngữ nghĩa |
 | `impact_analysis` | Đổi field/method này → ảnh hưởng đến những gì |
 
+> **M1 (available now):** `resolve_model`, `resolve_field`, `resolve_method`  
+> **M2–M4 (planned):** `resolve_view`, `find_examples`, `impact_analysis`
+
 ---
 
 ## Nguyên Tắc Phát Triển
@@ -104,26 +107,24 @@ git clone https://github.com/Viindoo/odoo-semantic-mcp
 cd odoo-semantic-mcp
 cp .env.example .env                      # điền NEO4J_PASSWORD, PG_PASSWORD, ...
 
-# 1. Python runtime
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+# 1. Python runtime (venv tạo tại ~/.venv/odoo-semantic-mcp/)
+make install
+# Hoặc thủ công: uv venv ~/.venv/odoo-semantic-mcp && uv pip install --python ~/.venv/odoo-semantic-mcp/bin/python -e ".[dev]"
 
 # 2. Databases (Docker)
 docker compose up -d                      # Neo4j + PostgreSQL
 
-# 3. Index lần đầu (CLI, one-shot)
-python -m src.cli index --base-dir ~/git --version 17.0
+# 3. Index lần đầu — Milestone 5 (chưa implement)
+# python -m src.cli index --base-dir ~/git --version 17.0
 
 # 4. Khởi động MCP server (long-running — dùng systemd hoặc tmux)
 python -m src.mcp.server                  # lắng nghe tại :8002
 ```
 
-**Backup / Restore khi chuyển server:**
+**Backup / Restore khi chuyển server** *(Milestone 5 — chưa implement):*
 ```bash
-python -m src.cli backup --out backup-$(date +%Y%m%d).tar.gz
-# scp sang server mới, rồi:
-python -m src.cli restore --from backup-20260505.tar.gz
+# python -m src.cli backup --out backup-$(date +%Y%m%d).tar.gz
+# python -m src.cli restore --from backup-20260505.tar.gz
 ```
 
 ---
@@ -144,7 +145,7 @@ python -m src.cli restore --from backup-20260505.tar.gz
 
 > Xem [`TASKS.md`](TASKS.md) để biết task nào đang làm và task nào tiếp theo.
 
-**Milestone 1 — "First Wow":** `[~]` Đang thực hiện — cần E2E test thật với Neo4j  
+**Milestone 1 — "First Wow":** `[x]` Auto tests 16/16 PASSED — còn manual E2E với Claude Code thật  
 **Milestone 2 — "View Wow":** `[ ]` Chưa bắt đầu  
 **Milestone 3 — "Semantic Wow":** `[ ]` Chưa bắt đầu  
 **Milestone 4 — "Impact Wow":** `[ ]` Chưa bắt đầu  
