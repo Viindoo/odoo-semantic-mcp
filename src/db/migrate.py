@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS repos (
     created_at      TIMESTAMP DEFAULT NOW(),
     UNIQUE (url, branch)
 );
+
+CREATE INDEX IF NOT EXISTS idx_repos_profile_id ON repos(profile_id);
 """
 
 
