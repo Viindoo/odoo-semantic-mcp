@@ -7,7 +7,7 @@ Pipeline stages (per CLAUDE.md pipeline convention):
 Public API:
     index_profile(pg_conn, *, profile_name) -> summary dict
     index_all(pg_conn) -> aggregate summary dict
-    open_production_neo4j() -> neo4j.Driver   (used by __main__.py)
+    open_production_neo4j() -> neo4j.Driver   (external callers / health check)
     open_production_pg() -> psycopg2.connection (used by __main__.py)
 """
 import logging
@@ -30,20 +30,33 @@ _logger = logging.getLogger(__name__)
 # Production connection helpers (consumed by __main__.py)
 # ---------------------------------------------------------------------------
 
-def open_production_neo4j():
-    """Open a Neo4j driver using config / env vars."""
+def _neo4j_creds() -> tuple[str, str, str]:
+    """Return (uri, user, password) — single source of truth for Neo4j connection.
+
+    Priority: NEO4J_TEST_* env (tests) → NEO4J_* env (Docker/CI) →
+              [database]/neo4j_* in config file → hardcoded fallback.
+    """
     uri = (
-        os.getenv("NEO4J_URI")
-        or config.get("neo4j", "uri", fallback="bolt://localhost:7687")
+        os.getenv("NEO4J_TEST_URI")
+        or os.getenv("NEO4J_URI")
+        or config.get("database", "neo4j_uri", fallback="bolt://localhost:7687")
     )
     user = (
-        os.getenv("NEO4J_USER")
-        or config.get("neo4j", "user", fallback="neo4j")
+        os.getenv("NEO4J_TEST_USER")
+        or os.getenv("NEO4J_USER")
+        or config.get("database", "neo4j_user", fallback="neo4j")
     )
     password = (
-        os.getenv("NEO4J_PASSWORD")
-        or config.get("neo4j", "password", fallback="password")
+        os.getenv("NEO4J_TEST_PASSWORD")
+        or os.getenv("NEO4J_PASSWORD")
+        or config.get("database", "neo4j_password", fallback="password")
     )
+    return uri, user, password
+
+
+def open_production_neo4j():
+    """Open a Neo4j driver using config / env vars."""
+    uri, user, password = _neo4j_creds()
     return GraphDatabase.driver(uri, auth=(user, password))
 
 
@@ -137,14 +150,7 @@ def index_profile(pg_conn, *, profile_name: str) -> dict:
         _logger.warning("index_profile: no repos found for profile %r", profile_name)
         return {"modules": 0, "views": 0, "qweb": 0}
 
-    # Build writer from the driver's connection details.
-    # Neo4jWriter wraps its own internal driver — pass the raw uri/auth by
-    # creating a temporary writer backed by the shared test driver's address.
-    # For production, open_production_neo4j() supplies the driver;
-    # here we bridge by re-using the driver's URI stored in env / defaults.
-    uri = os.getenv("NEO4J_TEST_URI") or os.getenv("NEO4J_URI") or "bolt://localhost:7687"
-    user = os.getenv("NEO4J_TEST_USER") or os.getenv("NEO4J_USER") or "neo4j"
-    password = os.getenv("NEO4J_TEST_PASSWORD") or os.getenv("NEO4J_PASSWORD") or "password"
+    uri, user, password = _neo4j_creds()
     writer = Neo4jWriter(uri, user, password)
 
     try:
