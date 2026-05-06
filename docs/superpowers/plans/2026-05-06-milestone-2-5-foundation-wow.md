@@ -41,6 +41,14 @@ Các thay đổi sau xảy ra trong quá trình implement, **sau** khi plan đư
 
 **Thực tế:** Cả hai được modify khi implement Task 2 (add postgres service container vào CI, add pytest marker `postgres`). Discovery khi integration test cần postgres service để chạy trong CI.
 
+### A4. `.env.example` cleanup (F3/A2 fix)
+
+`.env.example` ban đầu còn chứa `MCP_HOST`, `MCP_PORT`, `ODOO_REPOS_BASE_DIR` — các config đã được chuyển vào `odoo-semantic.conf`. Opus review (lần 1) phát hiện, đã xoá commit `c21ddda`. Default `MCP_HOST=0.0.0.0` cũng là security risk.
+
+### A5. ADR-0001 schema evolution policy (B2)
+
+Opus review yêu cầu formal documentation về schema evolution policy. Tạo `docs/adr/0001-schema-evolution-policy.md` commit `644465d` — add-only M2.5–M5, adopt migration tool (yoyo/Alembic) tại M6.
+
 ---
 
 ## Zero-Trust Audit Findings

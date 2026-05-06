@@ -15,6 +15,10 @@ PostgreSQL schema trong `src/db/migrate.py` hiện dùng approach đơn giản: 
 
 3. **Rule cho intermediate milestones:** Nếu M5 cần ALTER (ngoài add table) — escalate David và update ADR này trước khi implement.
 
+> **Lưu ý:** `CREATE TABLE IF NOT EXISTS` là idempotent với *tạo bảng mới*, nhưng **không thêm column vào bảng đã tồn tại**.
+> Nếu developer thêm column vào `SCHEMA_SQL`, lệnh sẽ **silently no-op** trên DB đã có bảng đó.
+> Đây chính là failure mode ADR này muốn ngăn. Quy tắc: thêm column = forbidden cho đến M6 khi có migration tool.
+
 ## Consequences
 
 **Positive:**
