@@ -35,11 +35,12 @@ def writer(clean_neo4j, neo4j_driver):
     w.close()
 
 
-def make_parse_result(module_name: str, model_name: str) -> ParseResult:
+def make_parse_result(module_name: str, model_name: str,
+                      commit_sha: str | None = None) -> ParseResult:
     module = ModuleInfo(
         name=module_name, odoo_version=TEST_VERSION,
         repo=f"{module_name}_repo", path="/tmp",
-        depends=[], version_raw="",
+        depends=[], version_raw="", commit_sha=commit_sha,
     )
     model = ModelInfo(
         name=model_name, module=module_name, odoo_version=TEST_VERSION,
@@ -1716,4 +1717,61 @@ def test_tc5_combined_inherit_and_inherits_distinct_edge_types(writer, neo4j_dri
             RETURN count(*) AS cnt
         """, v=TEST_VERSION).single()
     assert bad_del["cnt"] == 0, "mail.thread must NOT be reached via DELEGATES_TO — only INHERITS"
+
+
+def test_module_node_has_last_commit_sha_after_write(writer, neo4j_driver):
+    result = make_parse_result("sale", "sale.order",
+                               commit_sha="abc123def456789abcdef")
+    writer.write_results([result])
+
+    with neo4j_driver.session() as session:
+        rec = session.run(
+            "MATCH (m:Module {name: $n, odoo_version: $v}) "
+            "RETURN m.last_commit_sha AS sha",
+            n="sale", v=TEST_VERSION
+        ).single()
+    assert rec is not None
+    assert rec["sha"] == "abc123def456789abcdef"
+
+
+def test_module_node_handles_none_commit_sha(writer, neo4j_driver):
+    result = make_parse_result("sale", "sale.order", commit_sha=None)
+    writer.write_results([result])
+
+    with neo4j_driver.session() as session:
+        rec = session.run(
+            "MATCH (m:Module {name: $n, odoo_version: $v}) "
+            "RETURN m.last_commit_sha AS sha",
+            n="sale", v=TEST_VERSION
+        ).single()
+    assert rec is not None
+    assert rec["sha"] is None
+
+
+def test_re_merge_updates_last_commit_sha(writer, neo4j_driver):
+    # Write first time with old sha
+    result1 = make_parse_result("sale", "sale.order",
+                                commit_sha="oldsha0000000000000000")
+    writer.write_results([result1])
+
+    with neo4j_driver.session() as session:
+        rec = session.run(
+            "MATCH (m:Module {name: $n, odoo_version: $v}) "
+            "RETURN m.last_commit_sha AS sha",
+            n="sale", v=TEST_VERSION
+        ).single()
+    assert rec["sha"] == "oldsha0000000000000000"
+
+    # Write second time with new sha (re-MERGE)
+    result2 = make_parse_result("sale", "sale.order",
+                                commit_sha="newsha1111111111111111")
+    writer.write_results([result2])
+
+    with neo4j_driver.session() as session:
+        rec = session.run(
+            "MATCH (m:Module {name: $n, odoo_version: $v}) "
+            "RETURN m.last_commit_sha AS sha",
+            n="sale", v=TEST_VERSION
+        ).single()
+    assert rec["sha"] == "newsha1111111111111111"
 

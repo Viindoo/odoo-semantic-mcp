@@ -25,11 +25,13 @@ def _write_parse_result(tx, result: ParseResult) -> None:
         MERGE (m:Module {name: $name, odoo_version: $v})
         SET m.repo = $repo, m.path = $path, m.version_raw = $version_raw,
             m.edition = $edition,
-            m.viindoo_equivalent_qname = $vvq
+            m.viindoo_equivalent_qname = $vvq,
+            m.last_commit_sha = $commit_sha
     """, name=module.name, v=module.odoo_version,
          repo=module.repo, path=module.path, version_raw=module.version_raw,
          edition=module.edition,
-         vvq=module.viindoo_equivalent_qname)
+         vvq=module.viindoo_equivalent_qname,
+         commit_sha=module.commit_sha)
 
     for dep in module.depends:
         tx.run("""
