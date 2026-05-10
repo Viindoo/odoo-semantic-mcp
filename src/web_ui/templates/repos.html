@@ -271,6 +271,10 @@
     }
   }
 
+  // Expose to global scope so inline `oninput="onRepoUrlChange(this.value)"` resolves.
+  // (Function is defined inside IIFE; inline attributes look up window globals.)
+  window.onRepoUrlChange = onRepoUrlChange;
+
   // Run once on page load in case form has a pre-filled SSH URL
   const urlInput = document.getElementById('repo-url-input');
   if (urlInput) onRepoUrlChange(urlInput.value);
