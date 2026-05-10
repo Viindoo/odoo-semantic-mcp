@@ -19,6 +19,39 @@ TEST_VERSION = "99.0"  # dedicated test version — avoids conflict with real da
 _NEO4J_IMAGE = os.getenv("NEO4J_IMAGE", "neo4j:5.26.25")
 
 
+def _playwright_chromium_available() -> bool:
+    """True if Playwright chromium binary is installed at the expected location.
+
+    pytest-playwright's session-scoped browser fixture raises a hard error
+    (not a skip) when the binary is missing, which then cascades into other
+    tests that share session-scoped DB fixtures. Detect missing binary
+    upfront and convert to a clean skip via pytest_collection_modifyitems.
+    """
+    cache_root = Path.home() / ".cache" / "ms-playwright"
+    if not cache_root.is_dir():
+        return False
+    return any(p.name.startswith("chromium") for p in cache_root.iterdir())
+
+
+def pytest_collection_modifyitems(config, items):
+    """Convert browser-marker tests to clean SKIPs when chromium binary missing.
+
+    Without this, pytest-playwright's `browser` fixture raises
+    "Executable doesn't exist at ~/.cache/ms-playwright/chromium..." during
+    fixture setup, and the resulting ERROR cascades to corrupt the shared
+    `pg_conn` session fixture — failing unrelated tests in the same suite.
+    Local dev: run `playwright install chromium` to enable browser tests.
+    """
+    if _playwright_chromium_available():
+        return
+    skip_marker = pytest.mark.skip(
+        reason="Playwright chromium not installed — run: playwright install chromium"
+    )
+    for item in items:
+        if "browser" in item.keywords:
+            item.add_marker(skip_marker)
+
+
 @pytest.fixture(scope="session")
 def neo4j_driver():
     """
@@ -262,13 +295,19 @@ class _UvicornThread(threading.Thread):
 
 
 def _wipe_web_ui_tables(conn) -> None:
-    """DELETE all rows from Web UI tables in FK-safe order."""
-    with conn.cursor() as cur:
-        for tbl in ("usage_log", "repos", "api_keys", "ssh_keys", "profiles"):
-            try:
+    """DELETE all rows from Web UI tables in FK-safe order.
+
+    Each DELETE runs in its own cursor + rollback on failure so a missing table
+    doesn't poison the connection state for subsequent DELETEs (which would
+    otherwise raise InFailedSqlTransaction).
+    """
+    for tbl in ("usage_log", "repos", "api_keys", "ssh_key_pairs", "profiles"):
+        try:
+            with conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {tbl}")
-            except Exception:
-                pass  # table absent (e.g. before first migration) — safe to skip
+            conn.commit()
+        except Exception:
+            conn.rollback()  # table absent — clear failed-tx state, continue
 
 
 @pytest.fixture(scope="session")
