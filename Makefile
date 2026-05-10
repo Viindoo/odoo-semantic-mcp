@@ -34,6 +34,7 @@ install:
 	@echo "  2. docker compose up -d        # khởi động Neo4j + PostgreSQL"
 	@echo "  3. $(VENV)/bin/python -m src.db.migrate    # bootstrap schema"
 	@echo "  4. Xem README §Local E2E Quickstart để index repo + start MCP server."
+	@echo "  5. (optional) $(VENV)/bin/playwright install chromium    # cần cho 'make test-browser'"
 	@echo ""
 
 # --- Tests ---
@@ -47,7 +48,7 @@ test-unit:
 # Nếu muốn dùng Neo4j đang chạy sẵn thay vì testcontainers:
 #   make neo4j-up && make _test-neo4j && make neo4j-down
 test-integration:
-	$(PYTEST) tests/ -v -m "neo4j or postgres" --tb=short -rs
+	$(PYTEST) tests/ -v -m "(neo4j or postgres) and not browser" --tb=short -rs
 
 test-browser:
 	@$(COMPOSE) up -d postgres > /dev/null 2>&1

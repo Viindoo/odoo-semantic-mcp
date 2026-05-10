@@ -75,6 +75,19 @@ Khi chạy lần đầu, testcontainers sẽ pull image được cấu hình tro
 make test-all
 ```
 
+### Browser E2E tests (Playwright + chromium)
+
+`make install` cài Python package `pytest-playwright` nhưng KHÔNG cài chromium binary (~150MB) — bước riêng:
+
+```bash
+~/.venv/odoo-semantic-mcp/bin/playwright install chromium
+make test-browser
+```
+
+`make test-browser` tự spin PostgreSQL qua docker compose, đợi healthy, rồi chạy 21 tests trong `tests/test_web_ui_browser.py`.
+
+> **Note:** `make test-integration` tự skip browser tests nếu chromium chưa cài (qua `pytest_collection_modifyitems` hook trong `tests/conftest.py`) — không cascade error sang tests khác.
+
 ### Chạy một test cụ thể
 
 ```bash

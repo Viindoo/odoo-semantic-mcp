@@ -35,77 +35,83 @@ jobs:
 
   integration-tests:
     runs-on: ubuntu-latest
+    # Workflow-level env so `docker compose up` and pytest see the same passwords.
+    # `.env.example` ships passwords blank ("bắt buộc điền") — CI must supply them.
+    env:
+      NEO4J_PASSWORD: password
+      PG_PASSWORD: password
+      # Use 127.0.0.1 (IPv4) — ubuntu-latest resolves "localhost" to ::1 (IPv6)
+      # but docker-compose port mapping is "127.0.0.1:5432:5432" (IPv4 only).
+      # Same applies to Neo4j Bolt :7687.
+      NEO4J_TEST_URI: bolt://127.0.0.1:7687
+      NEO4J_TEST_USER: neo4j
+      NEO4J_TEST_PASSWORD: password
+      PG_TEST_DSN: postgresql://odoo_semantic:password@127.0.0.1:5432/odoo_semantic
     steps:
       - uses: actions/checkout@v5
 
-      - name: Start DB services
+      # Free port 5432 in case ubuntu-latest runner has system PostgreSQL active.
+      - name: Stop system PostgreSQL (free port 5432)
+        run: sudo systemctl stop postgresql || true
+
+      # `docker compose up --wait` blocks until each service passes its healthcheck:
+      #   - Neo4j: `cypher-shell 'RETURN 1'` (tests Bolt :7687 — what the driver actually uses)
+      #   - Postgres: `pg_isready -U odoo_semantic`
+      # Replaces the previous separate wait steps that probed wrong signals
+      # (Neo4j HTTP :7474 ready ≠ Bolt ready) and caused 303 silent skips.
+      - name: Start DB services and wait until healthy
         run: |
           cp .env.example .env
-          docker compose up -d
+          docker compose up -d --wait --wait-timeout 120
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
 
-      - name: Wait for PostgreSQL
-        run: |
-          timeout 60 sh -c \
-            'until docker compose exec -T postgres pg_isready -U odoo_semantic 2>/dev/null; \
-             do sleep 2; done'
-
-      - name: Wait for Neo4j
-        run: |
-          timeout 120 sh -c \
-            'until docker compose exec -T neo4j wget -q --spider http://localhost:7474 2>/dev/null; \
-             do sleep 3; done'
-
-      # Exclude smoke + browser — each runs in its own job for clear failure signals.
-      - run: pytest tests/ -v -m "(neo4j or postgres) and not smoke and not browser" --tb=short
-        env:
-          NEO4J_TEST_URI: bolt://localhost:7687
-          NEO4J_TEST_USER: neo4j
-          NEO4J_TEST_PASSWORD: password
-          PG_TEST_DSN: postgresql://odoo_semantic:password@localhost:5432/odoo_semantic
+      # `-rs` shows skip reasons in pytest summary — silent skips were how the
+      # previous CI breakage went unnoticed.
+      - run: pytest tests/ -v -rs -m "(neo4j or postgres) and not smoke and not browser" --tb=short
 
   smoke-tests:
     runs-on: ubuntu-latest
+    env:
+      NEO4J_PASSWORD: password
+      NEO4J_TEST_URI: bolt://127.0.0.1:7687
+      NEO4J_TEST_USER: neo4j
+      NEO4J_TEST_PASSWORD: password
     steps:
       - uses: actions/checkout@v5
 
-      - name: Start Neo4j
+      - name: Start Neo4j and wait until healthy
         run: |
           cp .env.example .env
-          docker compose up -d neo4j
+          docker compose up -d neo4j --wait --wait-timeout 120
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
 
-      - name: Wait for Neo4j
-        run: |
-          timeout 120 sh -c \
-            'until docker compose exec -T neo4j wget -q --spider http://localhost:7474 2>/dev/null; \
-             do sleep 3; done'
-
       - run: >
           pytest tests/test_smoke_index_core.py tests/test_smoke_pattern_wow.py
-          tests/test_smoke_product_wow.py -v -m smoke --tb=short
-        env:
-          NEO4J_TEST_URI: bolt://localhost:7687
-          NEO4J_TEST_USER: neo4j
-          NEO4J_TEST_PASSWORD: password
+          tests/test_smoke_product_wow.py -v -rs -m smoke --tb=short
 
   browser-tests:
     runs-on: ubuntu-latest
+    env:
+      PG_PASSWORD: password
+      PG_TEST_DSN: postgresql://odoo_semantic:password@127.0.0.1:5432/odoo_semantic
     steps:
       - uses: actions/checkout@v5
 
-      - name: Start PostgreSQL
+      - name: Stop system PostgreSQL (free port 5432)
+        run: sudo systemctl stop postgresql || true
+
+      - name: Start PostgreSQL and wait until healthy
         run: |
           cp .env.example .env
-          docker compose up -d postgres
+          docker compose up -d postgres --wait --wait-timeout 60
 
       - uses: actions/setup-python@v6
         with:
@@ -113,12 +119,4 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: playwright install chromium --with-deps
 
-      - name: Wait for PostgreSQL
-        run: |
-          timeout 60 sh -c \
-            'until docker compose exec -T postgres pg_isready -U odoo_semantic 2>/dev/null; \
-             do sleep 2; done'
-
-      - run: pytest tests/test_web_ui_browser.py -v -m "browser and postgres" --tb=short
-        env:
-          PG_TEST_DSN: postgresql://odoo_semantic:password@localhost:5432/odoo_semantic
+      - run: pytest tests/test_web_ui_browser.py -v -rs -m "browser and postgres" --tb=short
