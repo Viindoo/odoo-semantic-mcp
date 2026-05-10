@@ -180,8 +180,10 @@ def test_rotate_fernet_re_encrypts_rows():
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
 
+    # Use `--flag=value` form so argparse can't misread a Fernet key
+    # starting with `-` (URL-safe base64 alphabet includes `-`) as another flag.
     args = _build_parser().parse_args(
-        ["rotate-fernet", "--old-key", old_key.decode(), "--new-key", new_key.decode()]
+        ["rotate-fernet", f"--old-key={old_key.decode()}", f"--new-key={new_key.decode()}"]
     )
     with patch("psycopg2.connect", return_value=mock_conn):
         with patch("src.cli._get_pg_dsn", return_value="postgresql://user:pw@localhost/db"):
@@ -193,7 +195,7 @@ def test_rotate_fernet_re_encrypts_rows():
 
 def test_rotate_fernet_invalid_key():
     args = _build_parser().parse_args(
-        ["rotate-fernet", "--old-key", "not-a-key", "--new-key", "also-bad"]
+        ["rotate-fernet", "--old-key=not-a-key", "--new-key=also-bad"]
     )
     result = _cmd_rotate_fernet(args)
     assert result == 1
@@ -218,7 +220,7 @@ def test_rotate_fernet_skips_undecryptable_row():
     mock_conn.cursor.return_value = mock_cursor
 
     args = _build_parser().parse_args(
-        ["rotate-fernet", "--old-key", old_key.decode(), "--new-key", new_key.decode()]
+        ["rotate-fernet", f"--old-key={old_key.decode()}", f"--new-key={new_key.decode()}"]
     )
     with patch("psycopg2.connect", return_value=mock_conn):
         with patch("src.cli._get_pg_dsn", return_value="postgresql://user:pw@localhost/db"):
