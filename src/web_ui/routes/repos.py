@@ -78,6 +78,167 @@ async def create_profile(
     return RedirectResponse("/repos", status_code=303)
 
 
+@router.post("/repos/profiles/{profile_id}/delete", response_class=RedirectResponse)
+async def delete_profile(request: Request, profile_id: int):
+    """Delete a profile (and cascade-delete its repos), then clean Neo4j + pgvector."""
+    from pathlib import Path
+    from urllib.parse import quote_plus
+
+    conn = _get_conn()
+    if not conn:
+        return RedirectResponse(
+            "/repos?flash=" + quote_plus("Cannot connect to database."),
+            status_code=303,
+        )
+
+    try:
+        from src.db.repo_registry import delete_profile as _delete_profile
+        from src.db.repo_registry import get_repos_for_profile, list_profiles
+        from src.indexer.pipeline import indexer_is_running
+
+        # Lookup profile name for flash message + job guard
+        profiles = list_profiles(conn)
+        profile = next((p for p in profiles if p["id"] == profile_id), None)
+        if profile is None:
+            return RedirectResponse(
+                "/repos?flash=" + quote_plus("Profile not found."),
+                status_code=303,
+            )
+
+        profile_name = profile["name"]
+
+        # Guard: reject if indexer is running for this profile
+        if indexer_is_running(conn, profile_name):
+            flash = f"Cannot delete: indexer running for profile {profile_name}"
+            return RedirectResponse(
+                f"/repos?flash={quote_plus(flash)}",
+                status_code=303,
+            )
+
+        # Snapshot repos BEFORE PG delete (for Neo4j + pgvector cleanup)
+        repos = get_repos_for_profile(conn, profile_name)
+        repo_cleanup_pairs = [
+            {
+                "basename": Path(r["local_path"]).name,
+                "version": r["odoo_version"],
+            }
+            for r in repos
+        ]
+
+        # PG delete (CASCADE removes child repos automatically)
+        result = _delete_profile(conn, profile_id)
+        repo_count = len(result["repos"])
+
+    except Exception as e:
+        _logger.warning("Delete profile %s failed: %s", profile_id, e)
+        return RedirectResponse(
+            "/repos?flash=" + quote_plus(f"Delete failed: {e}"),
+            status_code=303,
+        )
+    finally:
+        conn.close()
+
+    # Neo4j + pgvector cleanup (outside PG conn — Neo4j driver manages its own connections)
+    total_modules, total_children = _delete_neo4j_for_repos(repo_cleanup_pairs)
+    total_embeddings = _delete_embeddings_for_repos(repo_cleanup_pairs)
+
+    flash = (
+        f"Profile '{profile_name}' deleted "
+        f"({repo_count} repo{'s' if repo_count != 1 else ''}, "
+        f"{total_modules} Neo4j modules, {total_children} child nodes, "
+        f"{total_embeddings} embeddings)"
+    )
+    return RedirectResponse(f"/repos?flash={quote_plus(flash)}", status_code=303)
+
+
+def _get_neo4j_writer():
+    """Build a Neo4jWriter from config, or None if password is missing."""
+    from src import config
+    from src.indexer.writer_neo4j import Neo4jWriter
+
+    uri = config.from_env_or_ini(
+        "NEO4J_URI", "database", "neo4j_uri",
+        fallback="bolt://localhost:7687",
+    )
+    user = config.from_env_or_ini(
+        "NEO4J_USER", "database", "neo4j_user", fallback="neo4j",
+    )
+    password = config.from_env_or_ini(
+        "NEO4J_PASSWORD", "database", "neo4j_password", fallback=None,
+    )
+    if not password:
+        return None
+    return Neo4jWriter(uri=uri, user=user, password=password)
+
+
+def _delete_neo4j_for_repos(repo_cleanup_pairs: list[dict]) -> tuple[int, int]:
+    """Delete Neo4j Module nodes + children for each (basename, version) pair.
+
+    Returns (total_modules_deleted, total_children_deleted).
+    """
+    total_modules = 0
+    total_children = 0
+    for pair in repo_cleanup_pairs:
+        basename = pair["basename"]
+        version = pair["version"]
+        try:
+            writer = _get_neo4j_writer()
+            if writer is None:
+                continue
+            try:
+                counts = writer.delete_modules_scoped(basename, version)
+                total_modules += counts.get("modules", 0)
+                total_children += counts.get("children", 0)
+            finally:
+                writer.close()
+        except Exception as e:
+            _logger.warning(
+                "Neo4j cleanup failed for repo %s version %s: %s", basename, version, e
+            )
+    return total_modules, total_children
+
+
+def _delete_embeddings_for_repos(repo_cleanup_pairs: list[dict]) -> int:
+    """Delete pgvector embeddings rows for each (basename, version) repo pair.
+
+    Uses basename as the module name: in Odoo, the module name equals the checkout
+    directory name (basename). This is exact for single-module repos. Multi-module
+    repos (uncommon) may leave orphan rows — covered by future `--gc` pass.
+
+    Returns total embeddings rows deleted.
+    """
+    import psycopg2
+
+    from src import config
+
+    total = 0
+    dsn = config.from_env_or_ini("PG_DSN", "database", "pg_dsn", fallback=None)
+    if not dsn:
+        return 0
+
+    for pair in repo_cleanup_pairs:
+        version = pair["version"]
+        basename = pair["basename"]
+        try:
+            pg_conn = psycopg2.connect(dsn)
+            pg_conn.autocommit = True
+            try:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM embeddings WHERE odoo_version = %s AND module = %s",
+                        (version, basename),
+                    )
+                    total += cur.rowcount
+            finally:
+                pg_conn.close()
+        except Exception as e:
+            _logger.warning(
+                "pgvector cleanup failed for repo %s version %s: %s", basename, version, e
+            )
+
+    return total
+
+
 @router.post("/repos/repos", response_class=RedirectResponse)
 async def add_repo(
     request: Request,
