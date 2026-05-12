@@ -26,9 +26,13 @@ technical details. This skill serves both.
 - v9: First CE/EE split — major positioning story
 - v10: Odoo rebranding from OpenERP, full Python 3 migration start
 - v11/v12: Community stabilization, major accounting improvements
-- v13: OWL frontend — dramatic UX improvement, relevant for "modern UI" messaging
-- v14/v15: OWL 2.0, spreadsheet integration, sign module matured
-- v16: Full OWL stable, accounting localization improvements, new field types
+- v13: OWL introduced as new JS framework — lays groundwork for future UX improvements, but
+  most views still use legacy widget system in this version
+- v14: OWL becomes primary frontend framework — dramatic UX improvement, relevant for "modern
+  UI" messaging; `web.Widget` deprecated
+- v15: OWL 2.0 (breaking changes in OWL API), spreadsheet integration, sign module matured
+- v16: Full OWL stable, `web.Widget` removed completely, accounting localization improvements,
+  new field types
 - v17: Performance improvements, Python 3.10+, many UX refinements
 - v18+: ORM enhancements, ongoing module restructuring
 

@@ -31,8 +31,9 @@ Getting the override location wrong causes subtle, hard-to-debug issues:
   `super()` with new API: `super(MyModel, self).method(...)`.
 - **v13+ (modern):** `@api.multi` and `@api.one` removed. All methods implicitly recordset-aware.
   `super()` standard Python 3 style: `super().method(...)`.
-- **Frontend/JS v13+ (OWL):** Override via `patch()` utility: `import { patch } from "@web/core/utils/patch"`.
-  Old `web.Widget` `.include()` pattern is removed.
+- **Frontend/JS v14+ (OWL primary):** Override via `patch()` utility: `import { patch } from "@web/core/utils/patch"`.
+  Old `web.Widget` `.include()` pattern deprecated in v14, removed completely in v16+.
+  In v13, OWL was introduced but `web.Widget` still coexisted — use `patch()` only for v14+.
 - **XML/QWeb:** Override via `xpath` in XML with `position="replace|before|after|attributes"` on
   `<template>` or `<record>` with `inherit_id`.
 
@@ -52,7 +53,7 @@ chain; `suggest_pattern` recommends the correct Odoo pattern. Different scenario
    - New computed value → `@api.depends` compute field
    - Pre/post hook → `create`/`write` override
    - Wizard step injection → `TransientModel` with `target_model_id`
-   - JS behavior → OWL `patch()` utility (v13+)
+   - JS behavior → OWL `patch()` utility (v14+; v13 introduced OWL but `web.Widget` still primary)
 
 Present a concrete code snippet template pre-filled with the correct class name, method signature,
 `super()` call, and proper decorator. Include compatibility note for which Odoo versions this

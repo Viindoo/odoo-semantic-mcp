@@ -27,8 +27,11 @@ Odoo deprecation happens in layers:
   requires rewriting models entirely — effort is significantly higher.
 - **v10–v12**: `@api.multi`, `@api.one`, `self.env.cr`, old `ir.values`. The `@api.multi`/
   `@api.one` decorators were removed in v13. This is a major breaking point.
-- **v13**: OWL frontend replaces old JS widget framework. `web.Widget` → OWL Component.
-- **v14–v15**: OWL 2.0 migration. Many JS `AbstractModel`, `AbstractRenderer` patterns removed.
+- **v13**: OWL introduced as new JS framework alongside old `web.Widget` — NOT yet the primary
+  framework. Most views still use the legacy widget system in v13.
+- **v14**: OWL becomes the primary frontend framework. `web.Widget` deprecated (still present).
+- **v15**: OWL 2.0 migration. Many JS `AbstractModel`, `AbstractRenderer` patterns removed.
+- **v16**: `web.Widget` removed completely.
 - **v16+**: `fields.Char(string=...)` positional arg removed; `Html` → `HtmlField`; old
   `_inherits` patterns deprecated. Python 3.10+ required.
 - **v17+**: `float_round` deprecation, `tools.config` partial changes, OWL 2.x stable.
@@ -105,5 +108,6 @@ breaking changes (e.g. `fields.Html` rename, `amount_by_group` signature), effor
 
 **Example 2:**
 Prompt: "chúng tôi đang dùng Odoo 12, muốn nâng lên 16 — cần sửa những gì"
-Output: Phân tích hai giai đoạn: v12→v13 (@api.multi removal, OWL migration) và v13→v16 (OWL 2.0,
-Html field), ước tính effort tổng thể là Very High, sprint plan chi tiết.
+Output: Phân tích ba giai đoạn: v12→v13 (@api.multi removal, OWL introduced), v13→v15 (OWL
+becomes primary in v14, OWL 2.0 in v15, web.Widget deprecated then removed), và v15→v16 (Html
+field, web.Widget fully removed), ước tính effort tổng thể là Very High, sprint plan chi tiết.

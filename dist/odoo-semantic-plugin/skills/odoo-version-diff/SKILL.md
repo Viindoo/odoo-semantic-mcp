@@ -26,9 +26,10 @@ Odoo version diff has two audiences with different needs:
 | Version jump | Key breaking changes |
 |-------------|---------------------|
 | v8 → v10 | Python 2→3, `__openerp__.py` → `__manifest__.py`, `osv.osv` → `models.Model`, `_columns` → class attributes, `pool.get()` removed |
-| v12 → v13 | `@api.multi`, `@api.one` removed; OWL frontend replaces old JS widget framework; `web.Widget` removed |
-| v14 → v15 | OWL 2.0 migration; many widget APIs changed |
-| v15 → v16 | `fields.Text` with `widget='html'` replaced by `fields.Html`; new `HtmlField` widget; `body_html` field type changes; accounting model restructure |
+| v12 → v13 | `@api.multi`, `@api.one` removed; OWL introduced as new JS framework (alongside old `web.Widget` — NOT yet primary) |
+| v13 → v14 | OWL becomes primary frontend framework; `web.Widget` deprecated (still present) |
+| v14 → v15 | OWL 2.0 migration; many widget APIs changed; `AbstractModel`, `AbstractRenderer` removed |
+| v15 → v16 | `web.Widget` removed completely; `fields.Text` with `widget='html'` replaced by `fields.Html`; new `HtmlField` widget; `body_html` field type changes; accounting model restructure |
 | v16 → v17 | Python 3.10+ required; performance improvements; several `tools.*` cleanup |
 | v17 → v18+ | ORM enhancements; module restructuring (ongoing) |
 
@@ -106,5 +107,6 @@ each breaking change, feature highlights, developer sprint plan.
 
 **Example 2:**
 Prompt: "so sánh API Odoo 12 và 16, chúng tôi cần migrate"
-Output: Cross-era diff (v12→v13 is era boundary: `@api.multi` removal + OWL migration), then
-v13→v16 diff. Era migration section prominent. Complexity: Very High. Sprint plan in Vietnamese.
+Output: Cross-era diff (v12→v13: `@api.multi` removal + OWL introduced; v13→v14: OWL becomes
+primary + `web.Widget` deprecated; v14→v16: OWL 2.0 + `web.Widget` removed). Era migration
+section prominent. Complexity: Very High. Sprint plan in Vietnamese.

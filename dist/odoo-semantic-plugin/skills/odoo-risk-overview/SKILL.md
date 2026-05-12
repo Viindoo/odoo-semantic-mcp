@@ -33,7 +33,7 @@ dimensions:
 
 **Version era multiplier:** Migrating across era boundaries amplifies risk:
 - Within same era (e.g. v16→v17): Low multiplier
-- Cross-era (e.g. v12→v16, crosses v13 OWL migration): Medium multiplier
+- Cross-era (e.g. v12→v16, crosses v13 `@api.multi` removal + v14 OWL-becomes-primary migration): Medium multiplier
 - OpenERP to modern (v8/v9→v12+): Very High multiplier (Python 2→3, full rewrite required)
 
 Viindoo note: `viin_*` modules are maintained by Viindoo for each major version. Risk for
@@ -102,4 +102,5 @@ migration complexity note (e.g. from v16 = Low multiplier), recommended action.
 **Example 2:**
 Prompt: "tổng quan rủi ro trước khi chúng tôi nâng cấp từ Viindoo 14 lên 17"
 Output: Phân tích rủi ro cho từng module `viin_*` vs custom modules, xác định module nào cần
-migration chuyên sâu (qua era v13 OWL), ước tính timeline và recommended action bằng tiếng Việt.
+migration chuyên sâu (v13 `@api.multi` removal + v14 OWL-becomes-primary + v15 OWL 2.0), ước
+tính timeline và recommended action bằng tiếng Việt.
