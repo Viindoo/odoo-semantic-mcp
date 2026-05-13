@@ -71,7 +71,7 @@ MERGE chỉ dùng key, SET properties riêng — không bao giờ đưa mutable 
 
 Dùng làm tier 1 ranking "Defined in" trong `resolve_*` (post-reindex authoritative).
 Pre-reindex fallback chính là `field_count DESC` (số Field declared cho model trong
-mỗi module — base luôn nhiều nhất). Xem `docs/adr/0004`.
+mỗi module — base luôn nhiều nhất). Xem `docs/adr/0013`.
 
 **INHERITS edge `order` property** — `r.order` = list-index trong `_inherit`,
 preserving Pattern D mixin injection order cho future MRO reconstruction.
@@ -106,7 +106,7 @@ ORDER BY rank_key DESC, mod.name ASC
 ORDER BY rank_key DESC
 ```
 
-Đặc biệt áp dụng cho ranking heuristic trong `resolve_*` (xem `docs/adr/0004`).
+Đặc biệt áp dụng cho ranking heuristic trong `resolve_*` (xem `docs/adr/0013`).
 
 Nguyên tắc numeric compare tương tự áp dụng cho Python-side — xem `_latest_version()` trong section v8/v9 bên dưới.
 
@@ -409,4 +409,4 @@ Web UI `POST /repos/{id}/clone` auto-clone SSH repos using FERNET-decrypted key 
 | `docs/adr/` | Architecture Decision Records — đọc trước khi đụng schema/policy |
 | `CONTRIBUTING.md` | Setup dev, chạy tests, workflow commit |
 
-**ADR đã có:** `0001` schema evolution (PostgreSQL no ALTER until M6) · `0002` spec schema policy (CoreSymbol/LintRule/CLI per-version, M4.5) · `0003` pattern storage (PatternExample Neo4j + reuse embeddings, M4.6) · `0004` Defined-in ranking heuristic (M5.5) · `0005` core coverage version paths (M5.5) · `0006` environment harness (M6 Wave 1) · `0007` incremental indexer (M6 Wave 2 — head_sha tracking, force-push fallback, module rename caveat, auto-reseed sentinel) · `0008` SSH auto-clone (M6 Wave 4 — URL detection, key delivery via env, tempfile safety, project-local known_hosts, full clone for incremental support, background lifecycle) · `0009` pattern catalogue community contribution (M6 Wave 3 — PR template, 80+ curated patterns, test-enforced minimum size) · `0010` embedding observability (M7 C5 — call_count thread-safe, COUNT(*) /health, no Prometheus) · `0011` Web UI session auth (M7 W16 — bcrypt cost=12, Starlette SessionMiddleware, 8h TTL, cookie SameSite=strict + httponly + Secure).
+**ADR đã có:** `0001` schema evolution (PostgreSQL no ALTER until M6) · `0002` spec schema policy (CoreSymbol/LintRule/CLI per-version, M4.5) · `0003` pattern storage (PatternExample Neo4j + reuse embeddings, M4.6) · `0013` Defined-in ranking heuristic (M5.5) · `0005` core coverage version paths (M5.5) · `0006` environment harness (M6 Wave 1) · `0007` incremental indexer (M6 Wave 2 — head_sha tracking, force-push fallback, module rename caveat, auto-reseed sentinel) · `0008` SSH auto-clone (M6 Wave 4 — URL detection, key delivery via env, tempfile safety, project-local known_hosts, full clone for incremental support, background lifecycle) · `0009` pattern catalogue community contribution (M6 Wave 3 — PR template, 80+ curated patterns, test-enforced minimum size) · `0010` embedding observability (M7 C5 — call_count thread-safe, COUNT(*) /health, no Prometheus) · `0011` Web UI session auth (M7 W16 — bcrypt cost=12, Starlette SessionMiddleware, 8h TTL, cookie SameSite=strict + httponly + Secure).
