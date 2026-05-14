@@ -380,15 +380,19 @@ def _resolve_method(
     return "\n".join(lines)
 
 
-def _resolve_view(xmlid: str, odoo_version: str = "auto") -> str:
+def _resolve_view(
+    xmlid: str, odoo_version: str = "auto",
+    profile_name: str | None = None,
+) -> str:
     with _get_driver().session() as session:
         odoo_version = _resolve_version(odoo_version, session)
 
         view_rec = session.run("""
             MATCH (v:View {xmlid: $xmlid, odoo_version: $ver})
+            WHERE ($profile_name IS NULL OR $profile_name IN v.profile)
             OPTIONAL MATCH (v)-[:DEFINED_IN]->(mod:Module)
             RETURN v, mod.name AS module_name, mod.repo AS repo
-        """, xmlid=xmlid, ver=odoo_version).single()
+        """, xmlid=xmlid, ver=odoo_version, profile_name=profile_name).single()
 
         if not view_rec:
             return f"View '{xmlid}' not found in Odoo {odoo_version}."
@@ -397,19 +401,21 @@ def _resolve_view(xmlid: str, odoo_version: str = "auto") -> str:
             MATCH (v:View {{xmlid: $xmlid, odoo_version: $ver}})
                   -[r:{REL_INHERITS_VIEW}]->(parent:View {{odoo_version: $ver}})
             WHERE NOT coalesce(r.unresolved, false)
+            AND ($profile_name IS NULL OR $profile_name IN v.profile)
             RETURN parent.xmlid AS parent_xmlid
-        """, xmlid=xmlid, ver=odoo_version).single()
+        """, xmlid=xmlid, ver=odoo_version, profile_name=profile_name).single()
 
         extensions = session.run(f"""
             MATCH (ext:View {{odoo_version: $ver}})-[:{REL_INHERITS_VIEW}]->
                   (v:View {{xmlid: $xmlid, odoo_version: $ver}})
             WHERE NOT coalesce(ext.unresolved, false)
+            AND ($profile_name IS NULL OR $profile_name IN ext.profile)
             OPTIONAL MATCH (ext)-[:DEFINED_IN]->(mod:Module)
             RETURN ext.xmlid AS ext_xmlid,
                    ext.xpaths_exprs AS xpaths_exprs,
                    ext.xpaths_positions AS xpaths_positions,
                    mod.name AS module_name, mod.repo AS repo
-        """, xmlid=xmlid, ver=odoo_version).data()
+        """, xmlid=xmlid, ver=odoo_version, profile_name=profile_name).data()
 
     v_props = view_rec["v"]
     repo_str = f"[{view_rec['repo']}] " if view_rec.get("repo") else ""
@@ -453,6 +459,7 @@ def _find_examples(
     limit: int = 5,
     context_module: str | None = None,
     chunk_types: list[str] | None = None,
+    profile_name: str | None = None,
     *,
     _driver=None,
     _pg_conn=None,
@@ -532,10 +539,11 @@ def _find_examples(
         dep_rows = session.run(
             f"UNWIND $names AS name"
             f" MATCH (m:Module {{name: name, odoo_version: $v}})"
+            f" WHERE ($profile_name IS NULL OR $profile_name IN m.profile)"
             f" WITH m, name"
             f" OPTIONAL MATCH (dep)-[:{REL_DEPENDS_ON}]->(m)"
             f" RETURN name, count(dep) AS dependents",
-            names=module_names, v=odoo_version,
+            names=module_names, v=odoo_version, profile_name=profile_name,
         ).data()
         dependents_map = {r["name"]: r["dependents"] for r in dep_rows}
 
@@ -545,8 +553,10 @@ def _find_examples(
                 "MATCH (ctx:Module {name: $ctx, odoo_version: $v})"
                 " -[:DEPENDS_ON*1..]->(tgt:Module)"
                 " WHERE tgt.name IN $names"
+                " AND ($profile_name IS NULL OR $profile_name IN ctx.profile)"
                 " RETURN DISTINCT tgt.name AS name",
                 ctx=context_module, v=odoo_version, names=module_names,
+                profile_name=profile_name,
             ).data()
             in_chain_set = {r["name"] for r in chain_rows}
 
@@ -710,7 +720,11 @@ def resolve_method(
 
 
 @mcp.tool()
-def resolve_view(xmlid: str, odoo_version: str = "auto") -> str:
+def resolve_view(
+    xmlid: str,
+    odoo_version: str = "auto",
+    profile_name: str | None = None,
+) -> str:
     """Return view inheritance chain and XPath modifications from all extension modules.
 
     TRIGGER when: "show xpath overrides for sale.order form", "which modules
@@ -724,6 +738,10 @@ def resolve_view(xmlid: str, odoo_version: str = "auto") -> str:
     Args:
         xmlid: External ID of the view, e.g. 'sale.view_order_form'.
         odoo_version: e.g. '17.0'. Default 'auto'.
+        profile_name: Optional profile filter (e.g. 'internal_profile_17').
+            When set, only nodes whose profile array contains this name are
+            returned — isolates results to the given deployment profile.
+            Default None returns nodes across all profiles.
 
     Returns:
         Tree text: view type, model, defining module, parent view (if
@@ -739,7 +757,7 @@ def resolve_view(xmlid: str, odoo_version: str = "auto") -> str:
               ├─ viin_sale.view_order_form_custom → [odoo] viin_sale
               └─ to_sale_custom.view_form_ext → [odoo] to_sale_custom
     """
-    return _resolve_view(xmlid, odoo_version)
+    return _resolve_view(xmlid, odoo_version, profile_name)
 
 
 @mcp.tool()
@@ -749,6 +767,7 @@ def find_examples(
     limit: int = 5,
     context_module: str | None = None,
     chunk_types: list[str] | None = None,
+    profile_name: str | None = None,
 ) -> str:
     """Semantic search for real code examples from the indexed Odoo codebase.
 
@@ -769,6 +788,7 @@ def find_examples(
         context_module: Boost results from modules this module depends on.
         chunk_types: Filter by type: method, field, view, qweb, js_era1,
             js_era2, js_era3. Default: all types.
+        profile_name: Profile filter for Neo4j rerank (ADR-0014 D6).
 
     Returns:
         Header + N results ranked by cosine + centrality + context boost.
@@ -781,7 +801,9 @@ def find_examples(
           #1 · score 0.82 · method · [sale] sale.order.action_confirm
              File: sale/models/sale_order.py
     """
-    return _find_examples(query, odoo_version, limit, context_module, chunk_types)
+    return _find_examples(
+        query, odoo_version, limit, context_module, chunk_types, profile_name
+    )
 
 
 def _compute_risk(view_count: int, method_count: int, js_count: int) -> str:
@@ -811,6 +833,7 @@ def _impact_analysis(
     entity_type: str,
     entity_name: str,
     odoo_version: str = "auto",
+    profile_name: str | None = None,
 ) -> str:
     """Return everything affected by changing the given entity. Risk-scored."""
     valid_types = ("field", "method", "model")
@@ -847,8 +870,10 @@ def _impact_analysis(
         if entity_type == "field":
             exists = session.run(
                 "MATCH (f:Field {name: $fn, model: $mn, odoo_version: $v}) "
+                "WHERE ($profile_name IS NULL OR $profile_name IN f.profile) "
                 "RETURN count(f) AS c",
                 fn=member_name, mn=model_name, v=odoo_version,
+                profile_name=profile_name,
             ).single()["c"]
             if not exists:
                 return (
@@ -857,8 +882,10 @@ def _impact_analysis(
         elif entity_type == "method":
             exists = session.run(
                 "MATCH (mth:Method {name: $mn, model: $model, odoo_version: $v}) "
+                "WHERE ($profile_name IS NULL OR $profile_name IN mth.profile) "
                 "RETURN count(mth) AS c",
                 mn=member_name, model=model_name, v=odoo_version,
+                profile_name=profile_name,
             ).single()["c"]
             if not exists:
                 return (
@@ -869,8 +896,9 @@ def _impact_analysis(
                 "MATCH (m:Model {name: $mn, odoo_version: $v}) "
                 "WHERE coalesce(m.unresolved, false) = false "
                 "AND m.module <> '__unresolved__' "
+                "AND ($profile_name IS NULL OR $profile_name IN m.profile) "
                 "RETURN count(m) AS c",
-                mn=model_name, v=odoo_version,
+                mn=model_name, v=odoo_version, profile_name=profile_name,
             ).single()["c"]
             if not exists:
                 return (
@@ -882,9 +910,10 @@ def _impact_analysis(
         # ------------------------------------------------------------------ #
         views = session.run(f"""
             MATCH (m:Model {{name: $mn, odoo_version: $v}})<-[:{REL_TARGETS_MODEL}]-(view:View)
+            WHERE ($profile_name IS NULL OR $profile_name IN view.profile)
             RETURN DISTINCT view.xmlid AS xmlid, view.module AS module
             ORDER BY view.module, view.xmlid
-        """, mn=model_name, v=odoo_version).data()
+        """, mn=model_name, v=odoo_version, profile_name=profile_name).data()
 
         # ------------------------------------------------------------------ #
         # Query 3: methods on this model (with super call filter for field;   #
@@ -894,21 +923,25 @@ def _impact_analysis(
             methods = session.run("""
                 MATCH (mth:Method {model: $mn, odoo_version: $v})
                 WHERE mth.has_super_call = true
+                AND ($profile_name IS NULL OR $profile_name IN mth.profile)
                 RETURN DISTINCT mth.name AS name, mth.module AS module
                 ORDER BY mth.module, mth.name
-            """, mn=model_name, v=odoo_version).data()
+            """, mn=model_name, v=odoo_version, profile_name=profile_name).data()
         elif entity_type == "method":
             methods = session.run("""
                 MATCH (mth:Method {name: $mn2, model: $mn, odoo_version: $v})
+                WHERE ($profile_name IS NULL OR $profile_name IN mth.profile)
                 RETURN DISTINCT mth.name AS name, mth.module AS module
                 ORDER BY mth.module
-            """, mn2=member_name, mn=model_name, v=odoo_version).data()
+            """, mn2=member_name, mn=model_name, v=odoo_version,
+                profile_name=profile_name).data()
         else:  # model
             methods = session.run("""
                 MATCH (mth:Method {model: $mn, odoo_version: $v})
+                WHERE ($profile_name IS NULL OR $profile_name IN mth.profile)
                 RETURN DISTINCT mth.name AS name, mth.module AS module
                 ORDER BY mth.module, mth.name
-            """, mn=model_name, v=odoo_version).data()
+            """, mn=model_name, v=odoo_version, profile_name=profile_name).data()
 
         # ------------------------------------------------------------------ #
         # Query 4: JS patches on components bound to this model               #
@@ -916,10 +949,11 @@ def _impact_analysis(
         js_patches = session.run("""
             MATCH (m:Model {name: $mn, odoo_version: $v})<-[:BOUND_TO]-(comp:OWLComp)
                   <-[:PATCHES]-(jp:JSPatch)
+            WHERE ($profile_name IS NULL OR $profile_name IN jp.profile)
             RETURN DISTINCT jp.target AS target, jp.patch_name AS patch_name,
                    jp.module AS module, jp.era AS era
             ORDER BY jp.module, jp.target
-        """, mn=model_name, v=odoo_version).data()
+        """, mn=model_name, v=odoo_version, profile_name=profile_name).data()
 
         # ------------------------------------------------------------------ #
         # Query 5: dependent modules of all modules defining this model       #
@@ -927,17 +961,19 @@ def _impact_analysis(
         dep_modules = session.run(f"""
             MATCH (m:Model {{name: $mn, odoo_version: $v}})-[:DEFINED_IN]->(defmod:Module)
                   <-[:{REL_DEPENDS_ON}]-(depmod:Module)
+            WHERE ($profile_name IS NULL OR $profile_name IN depmod.profile)
             RETURN DISTINCT depmod.name AS dep_name
             ORDER BY depmod.name
-        """, mn=model_name, v=odoo_version).data()
+        """, mn=model_name, v=odoo_version, profile_name=profile_name).data()
 
         # For model entity_type: also collect defining modules as "extensions"
         if entity_type == "model":
             def_modules = session.run("""
                 MATCH (m:Model {name: $mn, odoo_version: $v})-[:DEFINED_IN]->(mod:Module)
+                WHERE ($profile_name IS NULL OR $profile_name IN m.profile)
                 RETURN DISTINCT m.module AS module_name
                 ORDER BY m.module
-            """, mn=model_name, v=odoo_version).data()
+            """, mn=model_name, v=odoo_version, profile_name=profile_name).data()
         else:
             def_modules = []
 
@@ -1026,6 +1062,7 @@ def impact_analysis(
     entity_type: str,
     entity_name: str,
     odoo_version: str = "auto",
+    profile_name: str | None = None,
 ) -> str:
     """List everything affected by changing an entity. Risk-scored LOW/MEDIUM/HIGH.
 
@@ -1042,6 +1079,8 @@ def impact_analysis(
         entity_name: For field/method: '<model>.<name>' e.g.
             'sale.order.amount_total'. For model: '<model>' e.g. 'sale.order'.
         odoo_version: e.g. '17.0'. Default 'auto'.
+        profile_name: Profile filter for all 5 sub-queries
+            (Field/Method/View/JSPatch/Module). Default None = all profiles.
 
     Returns:
         Risk score (LOW/MEDIUM/HIGH) + breakdown of affected views, methods,
@@ -1055,7 +1094,7 @@ def impact_analysis(
           ├─ Methods (4): ...
           └─ Dependent modules (2): viin_sale, to_sale_custom
     """
-    return _impact_analysis(entity_type, entity_name, odoo_version)
+    return _impact_analysis(entity_type, entity_name, odoo_version, profile_name)
 
 
 # --- M4.5 spec layer tools ----------------------------------------------
@@ -1255,6 +1294,7 @@ def _format_deprecated_usage(records: list[dict], version: str) -> str:
 
 def _find_deprecated_usage(
     odoo_version: str = "auto", kind: str | None = None,
+    profile_name: str | None = None,
 ) -> str:
     """Quét user code dùng CoreSymbol có status deprecated/removed."""
     with _get_driver().session() as session:
@@ -1262,8 +1302,9 @@ def _find_deprecated_usage(
         cypher = f"""
             MATCH (mth:Method {{odoo_version: $v}})-[:{REL_USES_CORE_SYMBOL}]->(cs:CoreSymbol)
             WHERE cs.status IN ['deprecated', 'removed']
+            AND ($profile_name IS NULL OR $profile_name IN mth.profile)
         """
-        params: dict = {"v": odoo_version}
+        params: dict = {"v": odoo_version, "profile_name": profile_name}
         if kind:
             cypher += " AND cs.kind = $kind"
             params["kind"] = kind
@@ -1384,7 +1425,9 @@ def _lint_check(
 
 @mcp.tool()
 def find_deprecated_usage(
-    odoo_version: str = "auto", kind: str | None = None,
+    odoo_version: str = "auto",
+    kind: str | None = None,
+    profile_name: str | None = None,
 ) -> str:
     """Scan indexed code for methods that call deprecated or removed Odoo APIs.
 
@@ -1401,6 +1444,9 @@ def find_deprecated_usage(
         odoo_version: e.g. '17.0', '18.0'. Default 'auto'.
         kind: Optional filter — restrict to one CoreSymbol.kind
             (e.g. 'orm_method', 'function').
+        profile_name: Optional profile filter (e.g. 'internal_profile_17').
+            When set, only Method nodes whose profile array contains this name
+            are scanned. Default None scans across all profiles.
 
     Returns:
         Tree text grouped by module → model.method → deprecated symbol →
@@ -1413,7 +1459,7 @@ def find_deprecated_usage(
           │   ├─ uses: odoo.models.BaseModel.name_get (status=deprecated)
           │   └─ replacement: odoo.models.BaseModel.display_name
     """
-    return _find_deprecated_usage(odoo_version, kind=kind)
+    return _find_deprecated_usage(odoo_version, kind=kind, profile_name=profile_name)
 
 
 @mcp.tool()
@@ -1821,7 +1867,9 @@ def _format_suggest_pattern(
 
 
 def _check_module_exists(
-    name: str, odoo_version: str = "auto", *, _driver=None,
+    name: str, odoo_version: str = "auto", *,
+    profile_name: str | None = None,
+    _driver=None,
 ) -> str:
     """Report whether `name` is indexed + flag EE-confusion (per ADR-0003 §2).
 
@@ -1835,10 +1883,11 @@ def _check_module_exists(
         v = _resolve_version(odoo_version, session)
         rec = session.run("""
             MATCH (m:Module {name: $n, odoo_version: $v})
+            WHERE ($profile_name IS NULL OR $profile_name IN m.profile)
             RETURN m.edition AS edition,
                    m.viindoo_equivalent_qname AS vvq,
                    m.repo AS repo
-        """, n=name, v=v).single()
+        """, n=name, v=v, profile_name=profile_name).single()
 
     indexed = rec is not None
     edition = rec["edition"] if rec else None
@@ -2185,7 +2234,11 @@ def suggest_pattern(
 
 
 @mcp.tool()
-def check_module_exists(name: str, odoo_version: str = "auto") -> str:
+def check_module_exists(
+    name: str,
+    odoo_version: str = "auto",
+    profile_name: str | None = None,
+) -> str:
     """Verify if a module is indexed and flag EE-confusion for Viindoo stack.
 
     TRIGGER when: "does module sale_management exist in Odoo 17", "is
@@ -2200,6 +2253,9 @@ def check_module_exists(name: str, odoo_version: str = "auto") -> str:
     Args:
         name: Module technical name (e.g. 'sale', 'helpdesk', 'viin_helpdesk').
         odoo_version: '17.0' / '18.0' / 'auto'.
+        profile_name: Optional profile filter (e.g. 'internal_profile_17').
+            When set, only Module nodes whose profile array contains this name
+            are checked. Default None checks across all profiles.
 
     Returns:
         Tree text: Indexed yes/no, edition, EE-confusion flag, Viindoo
@@ -2213,7 +2269,7 @@ def check_module_exists(name: str, odoo_version: str = "auto") -> str:
           ├─ Viindoo equiv:   viin_helpdesk
           └─ ⚠ WARNING: this is an Odoo Enterprise module (legacy hardcoded dict).
     """
-    return _check_module_exists(name, odoo_version)
+    return _check_module_exists(name, odoo_version, profile_name=profile_name)
 
 
 @mcp.tool()

@@ -330,3 +330,21 @@ def test_get_ancestor_profile_names_unknown(migrated_pg):
     """Non-existent profile returns empty list."""
     names = repo_store().get_ancestor_profile_names("nonexistent")
     assert names == []
+
+
+def test_cycle_prevention_three_hop(migrated_pg):
+    """A→B→C exists; C→A raises ValueError (n-hop cycle).
+
+    Exercises the recursive CTE path of _validate_parent beyond the simple
+    A→B→A case — confirms that the ancestor walk goes all the way to the root.
+    """
+    a_id = repo_store().add_profile("odoo_17", "17.0")
+    b_id = repo_store().add_profile("standard_profile_17", "17.0")
+    c_id = repo_store().add_profile("internal_profile_17", "17.0")
+
+    repo_store().set_profile_parent(b_id, a_id)   # B's parent = A  (A→B)
+    repo_store().set_profile_parent(c_id, b_id)   # C's parent = B  (B→C)
+
+    # Attempting to set A's parent = C would form A→B→C→A cycle
+    with pytest.raises(ValueError, match="cycle"):
+        repo_store().set_profile_parent(a_id, c_id)

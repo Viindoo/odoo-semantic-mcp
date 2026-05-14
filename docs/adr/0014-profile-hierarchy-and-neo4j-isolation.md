@@ -132,15 +132,40 @@ from `get_ancestor_profile_names()`. Each indexer run overwrites the list
 
 ### D6 — MCP tools: optional `profile_name` filter
 
-`resolve_model`, `resolve_field`, `resolve_method` gain an optional
-`profile_name: str | None = None` parameter. When provided, Cypher adds:
+Eight tools now accept an optional `profile_name: str | None = None`
+parameter:
+
+- `resolve_model` — filters on `Model` node `.profile`
+- `resolve_field` — filters on `Field` node `.profile`
+- `resolve_method` — filters on `Method` node `.profile`
+- `resolve_view` — filters on `View` node `.profile` (primary + extensions)
+- `impact_analysis` — filters on all 5 sub-queries:
+  `Field`, `Method`, `View`, `JSPatch`, and dependent `Module` nodes
+- `find_deprecated_usage` — filters on `Method` node `.profile`
+- `check_module_exists` — filters on `Module` node `.profile`
+- `find_examples` — filters on the Neo4j `Module` rerank step only
+  (see caveat below)
+
+When provided, Cypher adds:
 
 ```cypher
-WHERE ($profile_name IS NULL OR $profile_name IN m.profile)
+WHERE ($profile_name IS NULL OR $profile_name IN <node>.profile)
 ```
 
 This pattern is backward compatible: the default `None` bypasses the
 filter, preserving existing behavior for all current users.
+
+**Caveat — `find_examples` pgvector path:** The `embeddings` table in
+PostgreSQL is keyed by `(odoo_version, chunk_type, module, ...)` but has
+no `profile` column. The ANN vector search therefore returns chunks from
+all profiles sharing the same `odoo_version`. The `profile_name` filter
+is applied only to the downstream Neo4j Module rerank step, which
+adjusts the centrality score of chunks belonging to modules outside the
+requested profile. This means chunks from out-of-profile modules may
+still appear in results if their vector similarity is high and they share
+the same `odoo_version`. Operators requiring strict profile isolation for
+semantic search should add a `profile` column to the `embeddings` table
+and extend the ANN WHERE clause in a future migration.
 
 ## Consequences
 
@@ -174,6 +199,8 @@ filter, preserving existing behavior for all current users.
   `index_profile` + `_index_repo`.
 - `src/indexer/writer_neo4j.py` — `profile` property on all node MERGEs.
 - `src/mcp/server.py` — `profile_name` filter on `resolve_model`,
-  `resolve_field`, `resolve_method`.
+  `resolve_field`, `resolve_method`, `resolve_view`, `impact_analysis`
+  (all 5 sub-queries), `find_deprecated_usage`, `check_module_exists`,
+  `find_examples` (Neo4j rerank only; pgvector path is version-scoped).
 - ADR-0001: Schema Evolution Policy (Neo4j SET properties, idempotent MERGE).
 - ADR-0007: Incremental Indexer (head_sha tracking; full reindex flag).
