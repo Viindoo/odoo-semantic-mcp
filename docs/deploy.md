@@ -765,6 +765,8 @@ server {
 
 Xem `docs/deploy/nginx.conf.example` để biết config đầy đủ, bao gồm các option auth.
 
+**M8 Astro Unified Architecture (W4):** Nếu deploy M8 (Astro landing + admin pages + FastAPI JSON API), sử dụng `docs/deploy/nginx-m8.conf` template thay vì `nginx.conf.example`. Template này route `/api/*` → port 8003 (FastAPI), `/admin/*` + `/` → port 4321 (Astro SSR), và giữ `/mcp`, `/install/`, `/health` → port 8002 (unchanged). Xem chi tiết tại §Stream C — nginx Integration trong `docs/superpowers/plans/2026-05-12-milestone-8-astro-unified.md`.
+
 ### 4.2 Caddy (auto-TLS, đơn giản hơn)
 
 ```bash
