@@ -534,6 +534,11 @@ def main() -> int:
         # the full seed via the helper below.
         # Failure logs a warning but does NOT fail the migrate run — admin can
         # re-seed manually via `python -m src.manager seed-master-data`.
+        # Catches only psycopg2.Error + ImportError (per Opus review): broader
+        # bare `except Exception` previously hid a fresh-install seed failure
+        # behind a non-fatal warning, so the admin would not learn the DB was
+        # empty until the first MCP query returned nothing. Traceback is
+        # printed so the failure stays investigable.
         try:
             from src.db import seed_master_data
             summary = seed_master_data.seed_all(conn)
@@ -543,7 +548,9 @@ def main() -> int:
                 f"{summary['repos_inserted']} repos new, "
                 f"{summary['repos_skipped']} unchanged"
             )
-        except Exception as e:
+        except (psycopg2.Error, ImportError) as e:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             print(
                 f"⚠ Master data seed failed (non-fatal): {e}\n"
                 "  Re-run manually: python -m src.manager seed-master-data",

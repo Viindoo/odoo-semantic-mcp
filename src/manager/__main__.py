@@ -194,8 +194,22 @@ def _cmd_seed_master_data(args, conn) -> int:
     name (manual hoặc seed cũ) không bị overwrite. With ``--reset``, DELETE
     all profiles matching seed-name prefixes first (CASCADE removes child
     repos); requires interactive ``YES`` confirm.
+
+    ``--reset`` and ``--profiles-only`` are mutually exclusive: combining them
+    would CASCADE-delete child repos but then skip re-seeding them, leaving
+    seeded profiles with no repos (silent foot-gun flagged by Opus review).
     """
     from src.db import seed_master_data
+
+    if args.reset and args.profiles_only:
+        print(
+            "✗ --reset and --profiles-only cannot be combined: --reset would "
+            "CASCADE-delete child repos, then --profiles-only would skip "
+            "re-seeding them, leaving seeded profiles with no repos.\n"
+            "  Use one flag at a time.",
+            file=sys.stderr,
+        )
+        return 1
 
     if args.reset:
         print(

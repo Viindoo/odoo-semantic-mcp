@@ -209,6 +209,27 @@ def test_reset_seeded_data_deletes_only_seeded_profiles(clean_pg):
         assert cur.fetchone()[0] == 1
 
 
+def test_cli_rejects_reset_and_profiles_only_combination(clean_pg, capsys):
+    """`seed-master-data --reset --profiles-only` must error out (Opus MED fix).
+
+    Combining the flags would CASCADE-delete child repos then skip re-seeding
+    them — silent foot-gun. The CLI rejects the combination with exit 1.
+    """
+    from argparse import Namespace
+
+    from src.manager.__main__ import _cmd_seed_master_data
+
+    run_migrations(clean_pg)
+    rc = _cmd_seed_master_data(
+        Namespace(reset=True, profiles_only=True), clean_pg
+    )
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "cannot be combined" in captured.err
+    # DB state unchanged (no DELETE, no INSERT)
+    assert _count_seeded_profiles(clean_pg) == 0
+
+
 @pytest.mark.parametrize(
     "profile_name,expected_url_substring",
     [
