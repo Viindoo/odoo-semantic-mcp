@@ -2,9 +2,10 @@
 """Tests for master data seeding (profiles + repos).
 
 Uses the session-scoped pg_conn + per-test clean_pg fixture to wipe schema
-tables (including yoyo state) before/after each test. run_migrations() then
-re-creates schema + applies migration 0002 (which seeds profiles). seed_repos()
-fills the repos table with default_clone_dir-derived local paths.
+tables (including yoyo state) before/after each test. ``run_migrations()``
+re-creates the schema (migration 0002 only contains an idempotent
+``ALTER TABLE``). Tests then call ``seed_profiles``/``seed_repos``/``seed_all``
+explicitly to drive the master-data seeding code path.
 """
 
 import pytest
@@ -18,6 +19,8 @@ from src.db.seed_master_data import (
     seed_profiles,
     seed_repos,
 )
+
+pytestmark = pytest.mark.postgres
 
 
 def _count_seeded_profiles(conn) -> int:
@@ -164,19 +167,41 @@ def test_seeded_repos_clone_status_manual(clean_pg):
 def test_admin_data_wins_on_name_conflict(clean_pg):
     """Manual profile created before seed is NOT overwritten — admin data wins."""
     run_migrations(clean_pg)
-    # Drop the auto-seeded odoo_17 and replace with a manual profile of the same name
-    # but different description.
+    # Create a manual profile of the same name BEFORE seed runs.
     with clean_pg.cursor() as cur:
-        cur.execute("DELETE FROM profiles WHERE name = %s", ("odoo_17",))
         cur.execute(
             "INSERT INTO profiles (name, odoo_version, description) VALUES (%s, %s, %s)",
             ("odoo_17", "17.0", "MANUAL — do not overwrite"),
         )
-    # Re-seed
+    # Run the seed — odoo_17 already exists → INSERT skipped → manual row preserved
     seed_profiles(clean_pg)
     with clean_pg.cursor() as cur:
         cur.execute("SELECT description FROM profiles WHERE name = %s", ("odoo_17",))
         assert cur.fetchone()[0] == "MANUAL — do not overwrite"
+
+
+def test_seed_repos_warns_on_cross_profile_conflict(clean_pg, capsys):
+    """Cross-profile (url, branch) skip emits a clarifying warning."""
+    run_migrations(clean_pg)
+    # Pre-register Viindoo/odoo @ 17.0 under a non-seed profile name
+    seed_profiles(clean_pg)  # ensures odoo_17 row exists
+    with clean_pg.cursor() as cur:
+        cur.execute(
+            "INSERT INTO profiles (name, odoo_version, description) "
+            "VALUES (%s, %s, %s) RETURNING id",
+            ("legacy_consumer", "17.0", "Legacy"),
+        )
+        legacy_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO repos (profile_id, url, branch, local_path, clone_status) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (legacy_id, "git@github.com:Viindoo/odoo.git", "17.0", "/tmp/legacy", "manual"),
+        )
+    # Now seed — odoo_17 wants Viindoo/odoo@17.0 too; should skip + warn
+    seed_repos(clean_pg)
+    captured = capsys.readouterr()
+    assert "legacy_consumer" in captured.err
+    assert "odoo_17" in captured.err
 
 
 def test_reset_seeded_data_deletes_only_seeded_profiles(clean_pg):

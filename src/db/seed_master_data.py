@@ -2,14 +2,16 @@
 """Master data seeding for profiles + repos.
 
 Seeds 26 standard profiles (Odoo CE v8-v19, Standard Viindoo v8-v19,
-Viindoo Internal v17/v18) and 68 corresponding repos rows. Idempotent via
+Viindoo Internal v17/v18) and 48 corresponding repos rows. Idempotent via
 INSERT ... ON CONFLICT DO NOTHING — safe to re-run.
 
-Profile rows are also defined in ``migrations/0002_master_data_seed.sql`` so
-that fresh DB bootstraps populate them inside the yoyo migration. The repos
-seeding lives in Python because ``repos.local_path`` depends on
-``Path.home()`` at runtime (see ``src/git_utils.py::default_clone_dir``) and
-cannot be hardcoded in pure SQL.
+Profile rows are seeded by ``seed_profiles()`` only —
+``migrations/0002_master_data_seed.sql`` no longer contains the INSERTs
+(kept as a schema-evolution hook for the upgrade-safe
+``ALTER TABLE profiles ADD COLUMN IF NOT EXISTS description``). See commit
+``e029d49`` for rationale. The repos seeding lives in Python because
+``repos.local_path`` depends on ``Path.home()`` at runtime (see
+``src/git_utils.py::default_clone_dir``) and cannot be hardcoded in pure SQL.
 
 Called from two places:
 1. ``src/db/migrate.py::main`` — after yoyo applies migrations, invokes
@@ -18,10 +20,11 @@ Called from two places:
    ``reset_seeded_data`` for re-seed / destructive reset.
 """
 
+import sys
+
 from src.git_utils import default_clone_dir
 
-# (name, odoo_version, description) — kept in sync with
-# migrations/0002_master_data_seed.sql. 26 rows total.
+# (name, odoo_version, description) — 26 rows total.
 _PROFILE_DEFS: list[tuple[str, str, str]] = [
     ("odoo_8",  "8.0",  "Odoo CE 8.0 (Viindoo fork as canonical CE)"),
     ("odoo_9",  "9.0",  "Odoo CE 9.0 (Viindoo fork as canonical CE)"),
@@ -194,6 +197,23 @@ def seed_repos(conn) -> tuple[int, int]:
                     inserted += 1
                 else:
                     skipped += 1
+                    # Identify which profile already owns this (url, branch) so
+                    # the admin knows why their newly-seeded profile may end up
+                    # with zero repos.
+                    with conn.cursor() as cur2:
+                        cur2.execute(
+                            "SELECT p.name FROM repos r "
+                            "JOIN profiles p ON p.id = r.profile_id "
+                            "WHERE r.url = %s AND r.branch = %s",
+                            (url, branch),
+                        )
+                        row2 = cur2.fetchone()
+                    if row2 is not None and row2[0] != profile_name:
+                        print(
+                            f"⚠ Skipping {url}@{branch} for profile '{profile_name}' — "
+                            f"already registered under '{row2[0]}'.",
+                            file=sys.stderr,
+                        )
     if not conn.autocommit:
         conn.commit()
     return inserted, skipped

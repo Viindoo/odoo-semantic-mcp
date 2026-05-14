@@ -150,9 +150,10 @@ WHERE profile_id IN (
 | Tình huống | Hành vi | Xử lý |
 |---|---|---|
 | Profile name đã có (vd `viindoo_internal_17` manual) | Seed skip (`ON CONFLICT (name) DO NOTHING`) | Admin data win. Review trùng lặp qua `python -m src.manager list`. |
-| Repo URL+branch đã có dưới profile khác | Seed skip (UNIQUE constraint) | OK — không double-add. Admin có thể move repo qua DB nếu muốn liên kết với seeded profile. |
+| Repo URL+branch đã có dưới profile khác | Seed skip (UNIQUE constraint) — `migrate` log cảnh báo stderr chỉ rõ profile nào đang sở hữu | OK — không double-add. Admin có thể move repo qua DB nếu muốn liên kết với seeded profile. |
+| Admin đã có repo trỏ tới (url, branch) trùng seed nhưng `local_path` khác `default_clone_dir()` derived path | Seed skip (UNIQUE chỉ check `(url, branch)`, không check `local_path`) → 1 row, `local_path` của admin thắng | Acceptable nếu admin đã clone repo vào path khác từ trước. Nếu muốn align với convention seed, drop row qua Web UI rồi re-seed. |
 | `Path.home()` mismatch (chạy bằng root thay vì service-user) | `repos.local_path` trỏ sai chỗ | Chạy migrate qua `sudo -u <service-user>` như runbook. Nếu lỡ chạy sai, có thể reset qua section Rollback. |
-| Code update thêm version mới (vd v20) | Migration `0002` đã marked applied — yoyo skip | Chạy `python -m src.manager seed-master-data` để pick up version mới (CLI idempotent UPSERT). |
+| Code update thêm version mới (vd v20) | Migration `0002` đã marked applied — yoyo skip | Chạy `python -m src.manager seed-master-data` để pick up version mới (CLI idempotent INSERT-if-not-exists — chỉ thêm row mới; row hiện hữu KHÔNG bị UPDATE). |
 
 ## Re-Seed Sau Code Update
 
@@ -185,13 +186,23 @@ sudo -u postgres psql odoo_semantic_db < backup_pre_master_data_$(date +%F).sql
 
 ### B. Destructive reset (chỉ xóa seeded data)
 
+> **⚠ Wildcard match risk**: `--reset` deletes EVERY profile whose name starts
+> with `odoo_`, `standard_viindoo_`, or `viindoo_internal_` — including
+> admin-created profiles that happen to share those prefixes (e.g.
+> `odoo_custom_client_v18`, `standard_viindoo_qa`). Backup PostgreSQL trước khi
+> dùng `--reset`. Nếu deployment có profile pattern bắt đầu bằng các prefix
+> này nhưng KHÔNG phải seed data, hãy rename chúng trước.
+
 ```bash
 sudo -u odoo-semantic ~/.venv/odoo-semantic-mcp/bin/python -m src.manager seed-master-data --reset
 ```
 
 CLI sẽ prompt nhập chuỗi `YES` để confirm. Sau confirm: DELETE mọi profile có
 tên match `odoo\_%`, `standard\_viindoo\_%`, hoặc `viindoo\_internal\_%`.
-`ON DELETE CASCADE` xóa luôn child repos. Sau đó seeded lại từ đầu.
+`ON DELETE CASCADE` xóa luôn child repos.
+
+`--reset` chạy standalone (không kèm `--profiles-only`) sẽ DELETE seeded
+profiles rồi tự re-seed lại 26 profiles + 48 repos trong cùng một lệnh.
 
 **Cảnh báo**: `--reset` cũng xóa profile manual nếu admin lỡ đặt tên trùng
 prefix seed. Backup PG TRƯỚC khi dùng `--reset`.
