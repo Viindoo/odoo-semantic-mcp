@@ -527,6 +527,35 @@ def main() -> int:
 
         _run_yoyo(dsn, existing_conn=conn)
         print(f"✓ Migrations applied to {safe_dsn}")
+
+        # Master data: profiles + repos are both seeded here (not in the yoyo
+        # SQL migration). This keeps `run_migrations` schema-only so legacy test
+        # fixtures see an empty profiles table; production `migrate.main` does
+        # the full seed via the helper below.
+        # Failure logs a warning but does NOT fail the migrate run — admin can
+        # re-seed manually via `python -m src.manager seed-master-data`.
+        # Catches only psycopg2.Error + ImportError (per Opus review): broader
+        # bare `except Exception` previously hid a fresh-install seed failure
+        # behind a non-fatal warning, so the admin would not learn the DB was
+        # empty until the first MCP query returned nothing. Traceback is
+        # printed so the failure stays investigable.
+        try:
+            from src.db import seed_master_data
+            summary = seed_master_data.seed_all(conn)
+            print(
+                f"✓ Seeded master data: {summary['profiles_inserted']} profiles new, "
+                f"{summary['profiles_skipped']} unchanged; "
+                f"{summary['repos_inserted']} repos new, "
+                f"{summary['repos_skipped']} unchanged"
+            )
+        except (psycopg2.Error, ImportError) as e:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            print(
+                f"⚠ Master data seed failed (non-fatal): {e}\n"
+                "  Re-run manually: python -m src.manager seed-master-data",
+                file=sys.stderr,
+            )
     finally:
         conn.close()
     return 0
