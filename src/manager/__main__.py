@@ -187,6 +187,63 @@ def _cmd_create_webui_user(args, conn) -> int:
     return 0
 
 
+def _cmd_seed_master_data(args, conn) -> int:
+    """Seed (or reset) 26 master data profiles + their repos.
+
+    Idempotent — INSERT ... ON CONFLICT DO NOTHING. Existing profiles trùng
+    name (manual hoặc seed cũ) không bị overwrite. With ``--reset``, DELETE
+    all profiles matching seed-name prefixes first (CASCADE removes child
+    repos); requires interactive ``YES`` confirm.
+
+    ``--reset`` and ``--profiles-only`` are mutually exclusive: combining them
+    would CASCADE-delete child repos but then skip re-seeding them, leaving
+    seeded profiles with no repos (silent foot-gun flagged by Opus review).
+    """
+    from src.db import seed_master_data
+
+    if args.reset and args.profiles_only:
+        print(
+            "✗ --reset and --profiles-only cannot be combined: --reset would "
+            "CASCADE-delete child repos, then --profiles-only would skip "
+            "re-seeding them, leaving seeded profiles with no repos.\n"
+            "  Use one flag at a time.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.reset:
+        print(
+            "⚠ --reset will DELETE every profile whose name starts with "
+            "'odoo_', 'standard_profile_', or 'internal_profile_'.\n"
+            "  CASCADE will remove their child repos.\n"
+            "  Manually-created profiles matching these prefixes WILL also be deleted.",
+            file=sys.stderr,
+        )
+        try:
+            confirm = input("Type 'YES' to confirm: ")
+        except (KeyboardInterrupt, EOFError):
+            print("\n✗ Aborted.", file=sys.stderr)
+            return 1
+        if confirm.strip() != "YES":
+            print("✗ Aborted (confirmation did not match).", file=sys.stderr)
+            return 1
+        deleted = seed_master_data.reset_seeded_data(conn)
+        print(f"✓ Reset: {deleted} seeded profile(s) deleted (CASCADE removed child repos)")
+
+    if args.profiles_only:
+        p_in, p_sk = seed_master_data.seed_profiles(conn)
+        print(f"✓ Seeded master data: {p_in} profiles new, {p_sk} unchanged (repos skipped)")
+    else:
+        summary = seed_master_data.seed_all(conn)
+        print(
+            f"✓ Seeded master data: {summary['profiles_inserted']} profiles new, "
+            f"{summary['profiles_skipped']} unchanged; "
+            f"{summary['repos_inserted']} repos new, "
+            f"{summary['repos_skipped']} unchanged"
+        )
+    return 0
+
+
 def _resolve_local_path(url: str, branch: str, base_dir: str, repo_map: dict[str, str]) -> str:
     """Resolve local path for a repo URL.
 
@@ -308,6 +365,40 @@ def main(argv: list[str] | None = None) -> int:
         help="Allow overwriting an existing user's password (for recovery)",
     )
 
+    p_seed = sub.add_parser(
+        "seed-master-data",
+        help="Seed (or reset) the 26 master data profiles + their repos",
+        epilog=textwrap.dedent("""
+            Idempotent — INSERT ... ON CONFLICT DO NOTHING. Existing profiles
+            with the same name (manual or prior seed) are NOT overwritten.
+
+            Examples:
+              # Standard idempotent seed (also auto-run by `python -m src.db.migrate`)
+              python -m src.manager seed-master-data
+
+              # Seed only the profiles row, skip repos (rare — usually for QA)
+              python -m src.manager seed-master-data --profiles-only
+
+              # DESTRUCTIVE: drop all seeded profiles + their repos, then re-seed
+              python -m src.manager seed-master-data --reset
+        """),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_seed.add_argument(
+        "--profiles-only",
+        action="store_true",
+        dest="profiles_only",
+        help="Seed profiles table only; skip repos seeding",
+    )
+    p_seed.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "DESTRUCTIVE: DELETE all seed-prefix profiles (CASCADE removes repos), "
+            "then re-seed. Requires interactive YES confirmation."
+        ),
+    )
+
     p_preset = sub.add_parser(
         "apply-preset",
         help="Register a bundled preset of profile + repos in one command",
@@ -424,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:
             "list": _cmd_list,
             "create-api-key": _cmd_create_api_key,
             "create-webui-user": _cmd_create_webui_user,
+            "seed-master-data": _cmd_seed_master_data,
         }[args.cmd](args, conn)
     finally:
         conn.close()
