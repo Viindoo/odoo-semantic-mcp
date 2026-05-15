@@ -7,6 +7,7 @@ import Hero from '../components/Hero.astro';
 import PersonaCards from '../components/PersonaCards.astro';
 import GraphShowcase from '../components/GraphShowcase.tsx';
 import PromptSimulator from '../components/PromptSimulator.tsx';
+import TokenBenchmark from '../components/TokenBenchmark.tsx';
 ---
 
 <BaseLayout
@@ -159,12 +160,9 @@ import PromptSimulator from '../components/PromptSimulator.tsx';
       <p class="text-viindoo-muted mt-4 text-lg max-w-2xl leading-relaxed">
         Measured on 40 real Odoo developer tasks. Precision: 100% with MCP vs 43% without. Context window savings pay for the server in week one.
       </p>
-      <!-- W8 will fill with TokenBenchmark.tsx -->
-      <div
-        data-testid="token-benchmark-slot"
-        class="mt-12 min-h-[300px] rounded-2xl border border-gray-200 bg-gray-50"
-        aria-label="Token benchmark — coming in W8"
-      />
+      <div class="mt-12">
+        <TokenBenchmark client:visible />
+      </div>
     </div>
   </section>
 
