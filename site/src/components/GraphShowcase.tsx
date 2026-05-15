@@ -107,13 +107,15 @@ function GraphShowcaseInner() {
   useEffect(() => {
     setError(null);
     setSnap(null);
-    fetch(`/graph-snapshots/${model}.json`)
+    const controller = new AbortController();
+    fetch(`/graph-snapshots/${model}.json`, { signal: controller.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
       .then(setSnap)
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => { if (e.name !== 'AbortError') setError(e.message); });
+    return () => controller.abort();
   }, [model]);
 
   const { nodes, edges } = useMemo(
@@ -129,11 +131,24 @@ function GraphShowcaseInner() {
     >
       {/* Toolbar */}
       <div className="absolute top-4 left-4 right-4 z-10 flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg bg-black/40 border border-white/10 p-1 backdrop-blur">
-          {MODELS.map((m) => (
+        <div
+          role="tablist"
+          aria-label="Model"
+          className="inline-flex rounded-lg bg-black/40 border border-white/10 p-1 backdrop-blur"
+        >
+          {MODELS.map((m, i) => (
             <button
               key={m}
               onClick={() => setModel(m)}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                  e.preventDefault();
+                  const delta = e.key === 'ArrowRight' ? 1 : -1;
+                  const next = (i + delta + MODELS.length) % MODELS.length;
+                  setModel(MODELS[next]);
+                }
+              }}
+              tabIndex={model === m ? 0 : -1}
               className={`px-3 py-1.5 text-xs font-mono rounded-md transition ${
                 model === m
                   ? 'bg-viindoo-primary text-viindoo-bg-0 font-semibold'

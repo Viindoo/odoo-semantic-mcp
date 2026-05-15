@@ -137,11 +137,13 @@ function PromptSimulatorInner() {
   return (
     <div data-testid="prompt-simulator" className="space-y-4">
       {/* Prompt selector */}
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div role="group" aria-label="Prompt examples" className="flex flex-wrap gap-2 mb-4">
         {EXAMPLES.map((_ex, i) => (
           <button
             key={i}
             onClick={() => setIdx(i)}
+            aria-pressed={idx === i}
+            aria-label={`Show example ${i + 1}`}
             className={`px-3 py-1.5 text-xs font-mono rounded-md transition ${idx === i ? 'bg-viindoo-primary text-viindoo-bg-0 font-semibold' : 'bg-white/5 border border-white/10 text-viindoo-on-dark-muted hover:text-viindoo-on-dark'}`}
           >
             Example {i + 1}

@@ -38,7 +38,7 @@ function BenchmarkCard({ c, index, animate }: { c: BenchmarkCase; index: number;
         0{index + 1}
       </div>
       <h3 className="font-display text-lg font-bold text-viindoo-dark leading-tight">{CASE_TITLES[c.id] || c.id}</h3>
-      <p className="font-mono text-[10px] uppercase tracking-widest text-viindoo-primary mt-1 mb-4">{c.persona}</p>
+      <p className="font-mono text-[10px] uppercase tracking-widest text-viindoo-primary-deep mt-1 mb-4">{c.persona}</p>
       <div className="rounded bg-gray-50 border-l-2 border-viindoo-primary p-3 font-mono text-xs text-viindoo-body mb-5">
         &ldquo;{c.query}&rdquo;
       </div>
@@ -85,10 +85,12 @@ function TokenBenchmarkInner() {
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch('/benchmark-data.json')
+    const controller = new AbortController();
+    fetch('/benchmark-data.json', { signal: controller.signal })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(setData)
-      .catch(e => setError(e.message));
+      .catch((e: Error) => { if (e.name !== 'AbortError') setError(e.message); });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -100,20 +102,33 @@ function TokenBenchmarkInner() {
     return () => obs.disconnect();
   }, [data]);
 
-  if (error) return <div className="text-viindoo-muted font-mono text-sm">Benchmark unavailable: {error}</div>;
-  if (!data) return <div className="text-viindoo-muted font-mono text-sm">Loading benchmark&hellip;</div>;
-
+  // The data-testid="token-benchmark" wrapper renders unconditionally so that
+  // both SSR output and pre-fetch hydration phase always expose the slot in
+  // the DOM. Browser tests use this testid as a scroll target — if it only
+  // appeared after the JSON fetch resolved, `scroll_into_view_if_needed`
+  // would race against `client:visible` hydration + fetch and time out in CI.
+  // This matches the pattern used by GraphShowcase and PromptSimulator.
   return (
     <div ref={rootRef} data-testid="token-benchmark">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        {data.cases.map((c, i) => (
-          <BenchmarkCard key={c.id} c={c} index={i} animate={animate} />
-        ))}
-      </div>
-      <p className="mt-6 text-center font-mono text-xs text-viindoo-muted">
-        Measured with tiktoken <code>{data.tokenizer}</code> on {data.measured_at} &middot;{' '}
-        <a href="/benchmarks/" className="text-viindoo-secondary hover:underline">methodology &rarr;</a>
-      </p>
+      {error ? (
+        <div role="alert" className="text-viindoo-muted font-mono text-sm">
+          Benchmark unavailable: {error}
+        </div>
+      ) : !data ? (
+        <div className="text-viindoo-muted font-mono text-sm">Loading benchmark&hellip;</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {data.cases.map((c, i) => (
+              <BenchmarkCard key={c.id} c={c} index={i} animate={animate} />
+            ))}
+          </div>
+          <p className="mt-6 text-center font-mono text-xs text-viindoo-muted">
+            Measured with tiktoken <code>{data.tokenizer}</code> on {data.measured_at} &middot;{' '}
+            <a href="/benchmarks/" className="text-viindoo-secondary hover:underline">methodology &rarr;</a>
+          </p>
+        </>
+      )}
     </div>
   );
 }

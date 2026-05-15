@@ -11,8 +11,11 @@ export default {
           secondary: '#7F4282',          // purple
           'secondary-bright': '#A263A5',
           success: '#00B365',
+          'success-deep': '#007A47',     // WCAG AA on white (5.5:1)
           warning: '#C99700',
+          'warning-deep': '#8B6900',     // WCAG AA on white (5.6:1)
           info: '#0099E6',
+          'info-deep': '#006BB3',        // WCAG AA on white (5.5:1)
           dark: '#21272B',               // text on light
           body: '#282F33',
           muted: '#6B6D70',
