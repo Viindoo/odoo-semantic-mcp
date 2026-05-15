@@ -297,6 +297,8 @@ def main(argv: list[str] | None = None) -> int:
                         pass
                 raise
         finally:
+            if embedder is not None:
+                embedder.close()
             pg.close()
 
     elif args.subcommand == "index-core":
