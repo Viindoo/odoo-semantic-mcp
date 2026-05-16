@@ -1546,7 +1546,7 @@ W6_LIST_FIELDS_VERSION = "84.0"
 W6_LIST_METHODS_VERSION = "83.0"
 W6_LIST_VIEWS_VERSION = "82.0"
 W6_LIST_OWL_VERSION = "81.0"
-W6_LIST_OWL_LEGACY_VERSION = "12.0"   # era guard (v8–v13)
+W6_LIST_OWL_LEGACY_VERSION = "13.99"  # era guard sentinel (major=13 ≤ 13 fires guard)
 W6_LIST_QWEB_VERSION = "80.0"
 W6_LIST_JS_VERSION = "79.0"
 W6_GRAMMAR_VERSION = "78.0"
@@ -2455,3 +2455,88 @@ def test_language_policy_static_templates():
         "static template strings):\n"
         + "\n".join(f"  {fn}:{lineno}: {prev!r}" for fn, lineno, prev in violations)
     )
+
+
+# ===========================================================================
+# ADR-0023 §4.2 — Next-step self-loop guard
+# ===========================================================================
+
+
+@pytest.mark.parametrize("idx", range(21))
+def test_next_step_no_loop(grammar_seed, idx):
+    """ADR-0023 §4.2: a tool's ``Next:`` hint MUST NOT reference itself.
+
+    Loop = self-reference (same tool name); drill-down = different tool. OK.
+    Terminal tools and sentinel edge-cases are exempt (they have no Next:).
+    """
+    version = grammar_seed
+    invocations = _all_tool_invocations(version)
+    name, fn = invocations[idx]
+
+    if name in TERMINAL_TOOLS or name in SENTINEL_EDGE_CASES:
+        pytest.skip(f"{name} is terminal/sentinel — no Next: expected, exempt")
+
+    out = fn()
+
+    # Collect all lines that contain ``Next:``
+    next_lines = [ln for ln in out.splitlines() if "Next:" in ln]
+    if not next_lines:
+        # Should not happen for drill-down tools, but don't double-fail here —
+        # test_next_step_footer_present already covers that contract.
+        return
+
+    for line in next_lines:
+        # Extract the hint payload after "Next: "
+        if "Next:" in line:
+            payload = line.split("Next:", 1)[1].strip()
+        else:
+            continue
+        # Split on pipe (multiple hints) and check each
+        for hint in payload.split("|"):
+            hint = hint.strip()
+            # Tool name is everything before the first '('
+            if "(" in hint:
+                tool_called = hint.split("(", 1)[0].strip()
+            else:
+                tool_called = hint.strip()
+            assert tool_called != name, (
+                f"Tool '{name}' suggests itself in Next: footer — "
+                f"self-loop violates ADR-0023 §4.2.\n"
+                f"  Offending line: {line!r}"
+            )
+
+
+# ===========================================================================
+# ADR-0023 §5.3 — list_owl_components bound_model warning footer
+# ===========================================================================
+
+
+def test_list_owl_components_bound_model_warning(neo4j_driver):
+    """``_list_owl_components(bound_model=X)`` emits the heuristic warning.
+
+    Per ADR-0023 §5.3: when ``bound_model`` filter is applied, the tool must
+    emit ``Warning: bound_model resolution is heuristic`` because
+    parser_js.py:415 uses a fuzzy heuristic that may miss components with
+    dynamic ``this.props.resModel``.
+    """
+    _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
+    try:
+        seed_owl_components(
+            neo4j_driver, module="sale_management",
+            odoo_version=W6_LIST_OWL_VERSION,
+            components=[
+                {"name": "SaleOrderKanban", "bound_model": "sale.order",
+                 "template": "tmpl_a"},
+            ],
+        )
+        srv = _import_server_module()
+        out = srv._list_owl_components(
+            "sale_management", W6_LIST_OWL_VERSION,
+            bound_model="sale.order",
+        )
+        assert "Warning: bound_model resolution is heuristic" in out, (
+            f"Expected heuristic warning when bound_model filter is set.\n"
+            f"Got:\n{out}"
+        )
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
