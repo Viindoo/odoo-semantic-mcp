@@ -1371,14 +1371,20 @@ def test_resolve_model_extended_by_tree_format(multi_ext_tools):
 
 
 def test_resolve_method_override_chain_tree_format(multi_mth_tools):
-    """Method with 3 overrides: first two use ├─, last uses └─ in Override chain."""
+    """Method with 3 overrides: first two use ├─, last uses └─ in Override chain.
+
+    Wave 5 (ADR-0023 §1.3 + §4): Override chain parent demoted to ``├─`` (the
+    new last branch is the ``└─ Next:`` footer). Sublist indent therefore uses
+    ``│   `` (pipe + 3 spaces) rather than the prior flat ``    `` indent so
+    the vertical line continues past the sublist to the Next: footer.
+    """
     resolve_method, version = multi_mth_tools
     result = resolve_method("account.move", "action_post", version)
     assert "Override chain (3)" in result, f"Expected 3-override chain:\n{result}"
 
     lines = result.splitlines()
     chain_start = next(i for i, line in enumerate(lines) if "Override chain" in line)
-    chain_lines = [line for line in lines[chain_start + 1:] if line.startswith("    ")]
+    chain_lines = [line for line in lines[chain_start + 1:] if line.startswith("│   ")]
 
     assert len(chain_lines) == 3, (
         f"Expected 3 override entries, got {len(chain_lines)}:\n{result}"
@@ -1386,6 +1392,10 @@ def test_resolve_method_override_chain_tree_format(multi_mth_tools):
     assert "└─" in chain_lines[-1], f"Last override must use └─:\n{chain_lines[-1]}"
     assert all("├─" in line for line in chain_lines[:-1]), (
         f"Non-last overrides must use ├─:\n{chain_lines[:-1]}"
+    )
+    # Wave 5 ADR-0023 §4: drill-down tools terminate with a Next: footer.
+    assert lines[-1].startswith("└─ Next:"), (
+        f"resolve_method must end with '└─ Next:' footer, got:\n{lines[-1]}"
     )
 
 
@@ -1503,3 +1513,1091 @@ def test_resolve_view_profile_filter_isolates(view_profile_tools):
     # alpha view is NOT found under beta_93 (different profile)
     result_alpha = resolve_view("mod_alpha.view_alpha_form", ver, profile_name="beta_93")
     assert "not found" in result_alpha.lower()
+
+
+# ===========================================================================
+# Wave 6 (ADR-0023) — tests for the 7 new tools + grammar / footer / language
+# policy enforcement. Each new tool gets happy/empty/truncation coverage; the
+# grammar test runs against all 21 tools; the language-policy test parses
+# server.py via ast and asserts no Vietnamese diacritics in static template
+# strings (docstrings exempt).
+# ===========================================================================
+
+from tests.conftest import (  # noqa: E402,I001
+    seed_js_patches, seed_owl_components, seed_qweb_templates,
+)
+
+
+def _import_server_module():
+    """Re-import src.mcp.server with NEO4J_* pointing at the test Neo4j."""
+    os.environ["NEO4J_URI"] = os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687")
+    os.environ["NEO4J_USER"] = os.getenv("NEO4J_TEST_USER", "neo4j")
+    os.environ["NEO4J_PASSWORD"] = os.getenv("NEO4J_TEST_PASSWORD", "password")
+    import sys
+    sys.modules.pop("src.mcp.server", None)
+    import src.mcp.server as srv  # noqa: PLC0415
+    return srv
+
+
+# --- per-test version slots — keep distinct from existing suite versions ----
+
+W6_DESCRIBE_VERSION = "85.0"
+W6_DESCRIBE_NO_MODELS_VERSION = "86.0"
+W6_LIST_FIELDS_VERSION = "84.0"
+W6_LIST_METHODS_VERSION = "83.0"
+W6_LIST_VIEWS_VERSION = "82.0"
+W6_LIST_OWL_VERSION = "81.0"
+W6_LIST_OWL_LEGACY_VERSION = "13.99"  # era guard sentinel (major=13 ≤ 13 fires guard)
+W6_LIST_QWEB_VERSION = "80.0"
+W6_LIST_JS_VERSION = "79.0"
+W6_GRAMMAR_VERSION = "78.0"
+W6_FOOTER_VERSION = "77.0"
+
+
+def _cleanup_version(driver, version: str) -> None:
+    with driver.session() as session:
+        session.run(
+            "MATCH (n) WHERE n.odoo_version = $v DETACH DELETE n", v=version,
+        )
+
+
+# --- describe_module --------------------------------------------------------
+
+
+def test_describe_module_happy(neo4j_driver):
+    """Module with manifest + defined model + extended model + JS patch."""
+    _cleanup_version(neo4j_driver, W6_DESCRIBE_VERSION)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        viin = ModuleInfo(
+            "viin_sale", W6_DESCRIBE_VERSION, "viindoo", "/tmp", ["sale"],
+            "17.0.1.0.0",
+        )
+        viin.edition = "viindoo"
+        sale_model = ModelInfo(
+            name="sale.report.custom", module="viin_sale",
+            odoo_version=W6_DESCRIBE_VERSION,
+            fields=[FieldInfo("name", "char")],
+        )
+        sale_model.had_explicit_name = True
+        # Extension model (had_explicit_name=False by default + inherit list)
+        # → writer sets is_definition=false → appears under "Extends models:".
+        ext_model = ModelInfo(
+            name="sale.order", module="viin_sale",
+            odoo_version=W6_DESCRIBE_VERSION,
+            inherit=["sale.order"],
+            fields=[FieldInfo("x_viin_field", "char")],
+        )
+        # had_explicit_name defaults to False — no override needed.
+        writer.write_results([ParseResult(module=viin, models=[sale_model, ext_model])])
+        # is_definition flag is needed for "Defines models" Cypher in
+        # _describe_module — set it explicitly for the definition model only.
+        with neo4j_driver.session() as session:
+            session.run(
+                "MATCH (m:Model {name:'sale.report.custom', module:'viin_sale',"
+                "                odoo_version:$v}) SET m.is_definition = true",
+                v=W6_DESCRIBE_VERSION,
+            )
+            # Ensure extension model explicitly has is_definition=false.
+            session.run(
+                "MATCH (m:Model {name:'sale.order', module:'viin_sale',"
+                "                odoo_version:$v}) SET m.is_definition = false",
+                v=W6_DESCRIBE_VERSION,
+            )
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._describe_module("viin_sale", W6_DESCRIBE_VERSION)
+        assert out.startswith(f"viin_sale (Odoo {W6_DESCRIBE_VERSION})")
+        assert "├─ Manifest:" in out
+        assert "Depends:" in out
+        assert "├─ Defines models:" in out
+        assert "sale.report.custom" in out
+        assert "├─ Extends models:" in out
+        assert "sale.order" in out
+        assert "├─ JS patches:" in out
+        assert out.rstrip().splitlines()[-1].startswith("└─ Next:")
+    finally:
+        _cleanup_version(neo4j_driver, W6_DESCRIBE_VERSION)
+
+
+def test_describe_module_empty(neo4j_driver):
+    """Unknown module → English error string (ADR-0023 §2)."""
+    _cleanup_version(neo4j_driver, W6_DESCRIBE_VERSION)
+    try:
+        srv = _import_server_module()
+        out = srv._describe_module("no_such_module", W6_DESCRIBE_VERSION)
+        assert "No module named 'no_such_module'" in out
+        assert W6_DESCRIBE_VERSION in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_DESCRIBE_VERSION)
+
+
+def test_describe_module_truncation(neo4j_driver):
+    """≥21 defined models → inline preview shows '... and K more (use list_fields(...))'."""
+    _cleanup_version(neo4j_driver, W6_DESCRIBE_VERSION)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        mega_mod = ModuleInfo(
+            "mega_mod", W6_DESCRIBE_VERSION, "test_repo", "/tmp", [], "17.0",
+        )
+        # describe_module uses LIST_PREVIEW_MAX_ITEMS=20 cap — seed 22 models so cap fires.
+        models = [
+            ModelInfo(
+                name=f"mega.model.{i:02d}", module="mega_mod",
+                odoo_version=W6_DESCRIBE_VERSION,
+                fields=[FieldInfo("name", "char")],
+            )
+            for i in range(22)
+        ]
+        writer.write_results([ParseResult(module=mega_mod, models=models)])
+        with neo4j_driver.session() as session:
+            session.run(
+                "MATCH (m:Model {module:'mega_mod', odoo_version:$v}) "
+                "SET m.is_definition = true",
+                v=W6_DESCRIBE_VERSION,
+            )
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._describe_module("mega_mod", W6_DESCRIBE_VERSION)
+        assert "Defines models: 22" in out
+        # describe_module inlines top-20 with "... and K more (use list_fields(...))" tail.
+        assert "and 2 more" in out
+        assert "use list_fields(" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_DESCRIBE_VERSION)
+
+
+def test_describe_module_no_models_skips_footer(neo4j_driver):
+    """ADR-0023 §4.4: describe_module with zero models defined/extended emits no Next: footer.
+
+    When a module has 0 defined models AND 0 extended models the server should
+    not emit the drill-down Next: hint, because there is nothing to drill into.
+    """
+    _cleanup_version(neo4j_driver, W6_DESCRIBE_NO_MODELS_VERSION)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        # Seed Module only — no models at all.
+        empty_mod = ModuleInfo(
+            "ww_empty_module", W6_DESCRIBE_NO_MODELS_VERSION,
+            "test_repo", "/tmp", [], "17.0",
+        )
+        writer.write_results([ParseResult(module=empty_mod, models=[])])
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._describe_module("ww_empty_module", W6_DESCRIBE_NO_MODELS_VERSION)
+        assert "Next:" not in out, (
+            f"Expected no Next: footer for a module with 0 models, got:\n{out!r}"
+        )
+    finally:
+        _cleanup_version(neo4j_driver, W6_DESCRIBE_NO_MODELS_VERSION)
+
+
+# --- list_fields ------------------------------------------------------------
+
+
+def test_list_fields_happy(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        sale_mod = ModuleInfo(
+            "sale", W6_LIST_FIELDS_VERSION, "odoo_test", "/tmp", [], "17.0",
+        )
+        sale_model = ModelInfo(
+            name="sale.order", module="sale",
+            odoo_version=W6_LIST_FIELDS_VERSION,
+            fields=[
+                FieldInfo("partner_id", "many2one"),
+                FieldInfo("amount_total", "monetary"),
+            ],
+        )
+        writer.write_results([ParseResult(module=sale_mod, models=[sale_model])])
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._list_fields("sale.order", W6_LIST_FIELDS_VERSION)
+        assert out.startswith(
+            f"Fields of sale.order (Odoo {W6_LIST_FIELDS_VERSION})",
+        )
+        assert "partner_id : many2one" in out
+        assert "amount_total : monetary" in out
+        assert out.rstrip().splitlines()[-1].startswith("└─ Next:")
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
+
+
+def test_list_fields_empty(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
+    try:
+        srv = _import_server_module()
+        out = srv._list_fields("ghost.model", W6_LIST_FIELDS_VERSION)
+        assert out.startswith(
+            f"Fields of ghost.model (Odoo {W6_LIST_FIELDS_VERSION})",
+        )
+        assert "(none)" in out
+        # Empty result still emits a Next: hint per Wave 5.
+        assert "└─ Next:" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
+
+
+def test_list_fields_truncation(neo4j_driver):
+    """>50 fields (LIST_PREVIEW_FIELDS_MAX) → cap disclosure appears."""
+    _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        mod = ModuleInfo(
+            "big_mod", W6_LIST_FIELDS_VERSION, "odoo_test", "/tmp", [], "17.0",
+        )
+        big_model = ModelInfo(
+            name="big.model", module="big_mod",
+            odoo_version=W6_LIST_FIELDS_VERSION,
+            fields=[FieldInfo(f"field_{i:03d}", "char") for i in range(60)],
+        )
+        writer.write_results([ParseResult(module=mod, models=[big_model])])
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._list_fields("big.model", W6_LIST_FIELDS_VERSION)
+        # cap = LIST_PREVIEW_FIELDS_MAX (50); 60 total → "and 10 more".
+        assert "and 10 more (use" in out
+        assert "list_fields" in out  # more_hint references the same tool
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
+
+
+# --- list_methods -----------------------------------------------------------
+
+
+def test_list_methods_happy(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_METHODS_VERSION)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        mod = ModuleInfo(
+            "sale", W6_LIST_METHODS_VERSION, "odoo_test", "/tmp", [], "17.0",
+        )
+        model = ModelInfo(
+            name="sale.order", module="sale",
+            odoo_version=W6_LIST_METHODS_VERSION,
+            methods=[
+                MethodInfo("action_confirm"),
+                MethodInfo("_compute_amount_total"),
+            ],
+        )
+        writer.write_results([ParseResult(module=mod, models=[model])])
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._list_methods("sale.order", W6_LIST_METHODS_VERSION)
+        assert out.startswith(
+            f"Methods of sale.order (Odoo {W6_LIST_METHODS_VERSION})",
+        )
+        assert "action_confirm" in out
+        assert "_compute_amount_total" in out
+        assert out.rstrip().splitlines()[-1].startswith("└─ Next:")
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_METHODS_VERSION)
+
+
+def test_list_methods_empty(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_METHODS_VERSION)
+    try:
+        srv = _import_server_module()
+        out = srv._list_methods("ghost.model", W6_LIST_METHODS_VERSION)
+        assert "(none)" in out
+        assert "└─ Next:" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_METHODS_VERSION)
+
+
+def test_list_methods_truncation(neo4j_driver):
+    """>20 methods → cap disclosure appears (LIST_PREVIEW_MAX_ITEMS)."""
+    _cleanup_version(neo4j_driver, W6_LIST_METHODS_VERSION)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        mod = ModuleInfo(
+            "many_methods_mod", W6_LIST_METHODS_VERSION, "odoo_test", "/tmp",
+            [], "17.0",
+        )
+        model = ModelInfo(
+            name="many.model", module="many_methods_mod",
+            odoo_version=W6_LIST_METHODS_VERSION,
+            methods=[MethodInfo(f"method_{i:03d}") for i in range(30)],
+        )
+        writer.write_results([ParseResult(module=mod, models=[model])])
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._list_methods("many.model", W6_LIST_METHODS_VERSION)
+        # cap = 20; 30 total → "and 10 more"
+        assert "and 10 more (use" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_METHODS_VERSION)
+
+
+# --- list_views -------------------------------------------------------------
+
+
+def test_list_views_happy(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_VIEWS_VERSION)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        sale_mod = ModuleInfo(
+            "sale", W6_LIST_VIEWS_VERSION, "odoo_test", "/tmp", [], "17.0",
+        )
+        views = [
+            ViewInfo(
+                xmlid="sale.view_order_form", name="form",
+                model="sale.order", module="sale",
+                odoo_version=W6_LIST_VIEWS_VERSION,
+                view_type="form", mode="primary", inherit_xmlid=None,
+            ),
+            ViewInfo(
+                xmlid="sale.view_order_tree", name="tree",
+                model="sale.order", module="sale",
+                odoo_version=W6_LIST_VIEWS_VERSION,
+                view_type="tree", mode="primary", inherit_xmlid=None,
+            ),
+        ]
+        writer.write_view_results(
+            [ViewParseResult(module=sale_mod, views=views)],
+        )
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._list_views("sale.order", W6_LIST_VIEWS_VERSION)
+        assert out.startswith(
+            f"Views of sale.order (Odoo {W6_LIST_VIEWS_VERSION})",
+        )
+        assert "sale.view_order_form : form" in out
+        assert "sale.view_order_tree : tree" in out
+        assert out.rstrip().splitlines()[-1].startswith("└─ Next:")
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_VIEWS_VERSION)
+
+
+def test_list_views_empty(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_VIEWS_VERSION)
+    try:
+        srv = _import_server_module()
+        out = srv._list_views("ghost.model", W6_LIST_VIEWS_VERSION)
+        assert "(none)" in out
+        assert "└─ Next:" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_VIEWS_VERSION)
+
+
+def test_list_views_truncation(neo4j_driver):
+    """>20 views → cap disclosure appears."""
+    _cleanup_version(neo4j_driver, W6_LIST_VIEWS_VERSION)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        mod = ModuleInfo(
+            "view_mod", W6_LIST_VIEWS_VERSION, "odoo_test", "/tmp", [], "17.0",
+        )
+        views = [
+            ViewInfo(
+                xmlid=f"view_mod.view_{i:03d}", name=f"v{i}",
+                model="big.model", module="view_mod",
+                odoo_version=W6_LIST_VIEWS_VERSION,
+                view_type="form", mode="primary", inherit_xmlid=None,
+            )
+            for i in range(25)
+        ]
+        writer.write_view_results(
+            [ViewParseResult(module=mod, views=views)],
+        )
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._list_views("big.model", W6_LIST_VIEWS_VERSION)
+        assert "and 5 more (use" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_VIEWS_VERSION)
+
+
+# --- list_owl_components ----------------------------------------------------
+
+
+def test_list_owl_components_happy(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
+    try:
+        seed_owl_components(
+            neo4j_driver, module="sale_management",
+            odoo_version=W6_LIST_OWL_VERSION,
+            components=[
+                {"name": "SaleOrderKanban", "bound_model": "sale.order",
+                 "template": "tmpl_a"},
+                {"name": "SaleSidebar", "bound_model": None,
+                 "template": "tmpl_b"},
+            ],
+        )
+        srv = _import_server_module()
+        out = srv._list_owl_components(
+            "sale_management", W6_LIST_OWL_VERSION,
+        )
+        assert out.startswith(
+            f"OWL components of sale_management (Odoo {W6_LIST_OWL_VERSION})",
+        )
+        assert "SaleOrderKanban : sale.order" in out
+        assert "SaleSidebar : (unbound)" in out
+        assert out.rstrip().splitlines()[-1].startswith("└─ Next:")
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
+
+
+def test_list_owl_components_empty(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
+    try:
+        srv = _import_server_module()
+        out = srv._list_owl_components(
+            "empty_module", W6_LIST_OWL_VERSION,
+        )
+        assert "(none)" in out
+        assert "└─ Next:" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
+
+
+def test_list_owl_components_truncation(neo4j_driver):
+    """>20 OWL components → cap disclosure appears."""
+    _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
+    try:
+        seed_owl_components(
+            neo4j_driver, module="big_owl_mod",
+            odoo_version=W6_LIST_OWL_VERSION,
+            components=[
+                {"name": f"Component{i:03d}", "bound_model": None,
+                 "template": None}
+                for i in range(25)
+            ],
+        )
+        srv = _import_server_module()
+        out = srv._list_owl_components(
+            "big_owl_mod", W6_LIST_OWL_VERSION,
+        )
+        # cap = LIST_PREVIEW_MAX_ITEMS (20); 25 total → "and 5 more"
+        assert "and 5 more (use" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
+
+
+def test_list_owl_components_era_guard_v13(neo4j_driver):
+    """Odoo v8–v13 (Widget era): empty + warning, suggest list_js_patches."""
+    _cleanup_version(neo4j_driver, W6_LIST_OWL_LEGACY_VERSION)
+    try:
+        srv = _import_server_module()
+        out = srv._list_owl_components(
+            "any_mod", W6_LIST_OWL_LEGACY_VERSION,
+        )
+        # Era-guard text is the canonical v8–v13 message per ADR-0023 §1.7.
+        assert "(none)" in out
+        assert "Widget era" in out
+        assert "list_js_patches" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_OWL_LEGACY_VERSION)
+
+
+# --- list_qweb_templates ----------------------------------------------------
+
+
+def test_list_qweb_templates_happy(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_QWEB_VERSION)
+    try:
+        seed_qweb_templates(
+            neo4j_driver, module="website_sale",
+            odoo_version=W6_LIST_QWEB_VERSION,
+            templates=[
+                {"xmlid": "website_sale.product", "inherit_xmlid": None},
+                {"xmlid": "website_sale.cart_lines",
+                 "inherit_xmlid": "website_sale.cart"},
+            ],
+        )
+        srv = _import_server_module()
+        out = srv._list_qweb_templates(
+            "website_sale", W6_LIST_QWEB_VERSION,
+        )
+        assert out.startswith(
+            f"QWeb templates of website_sale (Odoo {W6_LIST_QWEB_VERSION})",
+        )
+        assert "website_sale.product : t-inherit=(root)" in out
+        assert "website_sale.cart_lines : t-inherit=website_sale.cart" in out
+        assert out.rstrip().splitlines()[-1].startswith("└─ Next:")
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_QWEB_VERSION)
+
+
+def test_list_qweb_templates_empty(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_QWEB_VERSION)
+    try:
+        srv = _import_server_module()
+        out = srv._list_qweb_templates(
+            "empty_module", W6_LIST_QWEB_VERSION,
+        )
+        assert "(none)" in out
+        assert "└─ Next:" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_QWEB_VERSION)
+
+
+def test_list_qweb_templates_truncation(neo4j_driver):
+    """>20 QWeb templates → cap disclosure appears."""
+    _cleanup_version(neo4j_driver, W6_LIST_QWEB_VERSION)
+    try:
+        seed_qweb_templates(
+            neo4j_driver, module="big_qweb_mod",
+            odoo_version=W6_LIST_QWEB_VERSION,
+            templates=[
+                {"xmlid": f"big_qweb_mod.tmpl_{i:03d}",
+                 "inherit_xmlid": None}
+                for i in range(25)
+            ],
+        )
+        srv = _import_server_module()
+        out = srv._list_qweb_templates(
+            "big_qweb_mod", W6_LIST_QWEB_VERSION,
+        )
+        assert "and 5 more (use" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_QWEB_VERSION)
+
+
+# --- list_js_patches --------------------------------------------------------
+
+
+def test_list_js_patches_happy(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_JS_VERSION)
+    try:
+        seed_js_patches(
+            neo4j_driver, module="sale_management",
+            odoo_version=W6_LIST_JS_VERSION,
+            patches=[
+                {"target": "ListController", "patch_name": "applyFilters",
+                 "era": "patch"},
+                {"target": "FormView", "patch_name": "onLoad",
+                 "era": "patch"},
+            ],
+        )
+        srv = _import_server_module()
+        out = srv._list_js_patches(W6_LIST_JS_VERSION, module="sale_management")
+        assert "JS patches on sale_management" in out
+        assert "ListController.applyFilters : era=patch" in out
+        assert "FormView.onLoad : era=patch" in out
+        assert out.rstrip().splitlines()[-1].startswith("└─ Next:")
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_JS_VERSION)
+
+
+def test_list_js_patches_empty(neo4j_driver):
+    _cleanup_version(neo4j_driver, W6_LIST_JS_VERSION)
+    try:
+        srv = _import_server_module()
+        out = srv._list_js_patches(W6_LIST_JS_VERSION, module="empty_module")
+        assert "(none)" in out
+        assert "└─ Next:" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_JS_VERSION)
+
+
+def test_list_js_patches_truncation(neo4j_driver):
+    """>10 JS patches (LIST_PREVIEW_PATCHES_MAX) → cap disclosure appears."""
+    _cleanup_version(neo4j_driver, W6_LIST_JS_VERSION)
+    try:
+        seed_js_patches(
+            neo4j_driver, module="patchy_mod",
+            odoo_version=W6_LIST_JS_VERSION,
+            patches=[
+                {"target": f"Target{i:03d}", "patch_name": "go",
+                 "era": "patch"}
+                for i in range(15)
+            ],
+        )
+        srv = _import_server_module()
+        out = srv._list_js_patches(W6_LIST_JS_VERSION, module="patchy_mod")
+        # cap = LIST_PREVIEW_PATCHES_MAX (10); 15 total → "and 5 more"
+        assert "and 5 more (use" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_JS_VERSION)
+
+
+def test_list_js_patches_era_filter(neo4j_driver):
+    """era='era1' filter keeps only legacy extend patches."""
+    _cleanup_version(neo4j_driver, W6_LIST_JS_VERSION)
+    try:
+        seed_js_patches(
+            neo4j_driver, module="mixed_eras",
+            odoo_version=W6_LIST_JS_VERSION,
+            patches=[
+                {"target": "WidgetA", "patch_name": "legacy",
+                 "era": "extend"},
+                {"target": "ComponentB", "patch_name": "modern",
+                 "era": "patch"},
+            ],
+        )
+        srv = _import_server_module()
+        out_era1 = srv._list_js_patches(
+            W6_LIST_JS_VERSION, module="mixed_eras", era="era1",
+        )
+        assert "WidgetA.legacy" in out_era1
+        assert "ComponentB.modern" not in out_era1
+
+        out_era3 = srv._list_js_patches(
+            W6_LIST_JS_VERSION, module="mixed_eras", era="era3",
+        )
+        assert "ComponentB.modern" in out_era3
+        assert "WidgetA.legacy" not in out_era3
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_JS_VERSION)
+
+
+# ===========================================================================
+# Grammar consistency test — runs against all 21 tools.
+# ===========================================================================
+
+
+@pytest.fixture(scope="module")
+def grammar_seed(neo4j_driver):
+    """Seed a minimal but complete dataset so every tool returns content.
+
+    All 21 tools either render content or a deterministic empty/error string;
+    every output must obey the ADR-0023 §1 tree grammar.
+    """
+    _cleanup_version(neo4j_driver, W6_GRAMMAR_VERSION)
+    writer = Neo4jWriter(
+        uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+        user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+        password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+    )
+    writer.setup_indexes()
+    sale_mod = ModuleInfo(
+        "sale", W6_GRAMMAR_VERSION, "odoo_test", "/tmp", [], "17.0",
+    )
+    sale_model = ModelInfo(
+        name="sale.order", module="sale", odoo_version=W6_GRAMMAR_VERSION,
+        fields=[FieldInfo("name", "char"),
+                FieldInfo("amount_total", "monetary", compute="_compute_amount")],
+        methods=[MethodInfo("action_confirm")],
+    )
+    writer.write_results(
+        [ParseResult(module=sale_mod, models=[sale_model])],
+    )
+    view = ViewInfo(
+        xmlid="sale.view_order_form", name="form",
+        model="sale.order", module="sale",
+        odoo_version=W6_GRAMMAR_VERSION,
+        view_type="form", mode="primary", inherit_xmlid=None,
+    )
+    writer.write_view_results(
+        [ViewParseResult(module=sale_mod, views=[view])],
+    )
+    writer.close()
+    # Seed UI nodes via direct helpers.
+    seed_owl_components(
+        neo4j_driver, module="sale", odoo_version=W6_GRAMMAR_VERSION,
+        components=[{"name": "SaleOrderKanban",
+                     "bound_model": "sale.order", "template": "t"}],
+    )
+    seed_qweb_templates(
+        neo4j_driver, module="sale", odoo_version=W6_GRAMMAR_VERSION,
+        templates=[{"xmlid": "sale.qweb_x", "inherit_xmlid": None}],
+    )
+    seed_js_patches(
+        neo4j_driver, module="sale", odoo_version=W6_GRAMMAR_VERSION,
+        patches=[{"target": "ListController",
+                  "patch_name": "x", "era": "patch"}],
+    )
+    yield W6_GRAMMAR_VERSION
+    _cleanup_version(neo4j_driver, W6_GRAMMAR_VERSION)
+
+
+def _all_tool_invocations(version: str):
+    """Return list of (tool_name, callable) for every public MCP tool.
+
+    Each callable returns the tree-text string when invoked with the right
+    minimal arguments against the grammar_seed dataset.
+    """
+    srv = _import_server_module()
+    return [
+        ("resolve_model",
+         lambda: srv._resolve_model("sale.order", version)),
+        ("resolve_field",
+         lambda: srv._resolve_field("sale.order", "amount_total", version)),
+        ("resolve_method",
+         lambda: srv._resolve_method("sale.order", "action_confirm", version)),
+        ("resolve_view",
+         lambda: srv._resolve_view("sale.view_order_form", version)),
+        ("describe_module",
+         lambda: srv._describe_module("sale", version)),
+        ("list_fields",
+         lambda: srv._list_fields("sale.order", version)),
+        ("list_methods",
+         lambda: srv._list_methods("sale.order", version)),
+        ("list_views",
+         lambda: srv._list_views("sale.order", version)),
+        ("list_owl_components",
+         lambda: srv._list_owl_components("sale", version)),
+        ("list_qweb_templates",
+         lambda: srv._list_qweb_templates("sale", version)),
+        ("list_js_patches",
+         lambda: srv._list_js_patches(version, module="sale")),
+        ("check_module_exists",
+         lambda: srv._check_module_exists("sale", version)),
+        ("find_override_point",
+         lambda: srv._find_override_point("sale.order", "action_confirm", version)),
+        # Terminal tools (no Next: footer):
+        ("lint_check",
+         lambda: srv._lint_check("def f(): pass", version)),
+        ("cli_help",
+         lambda: srv._cli_help("server", version)),
+        ("api_version_diff",
+         lambda: srv._api_version_diff("nonexistent_symbol", version, version)),
+        # Tools that depend on data we don't seed; they take the empty-result
+        # branch which still emits a deterministic tree shape.
+        ("lookup_core_api",
+         lambda: srv._lookup_core_api("nonexistent_symbol", version)),
+        ("find_deprecated_usage",
+         lambda: srv._find_deprecated_usage(version)),
+        ("impact_analysis",
+         lambda: srv._impact_analysis("model", "sale.order", version)),
+        # find_examples uses pg + embedder; empty-query path returns a sentinel.
+        ("find_examples",
+         lambda: srv._find_examples("", version)),
+        ("suggest_pattern",
+         lambda: srv._suggest_pattern("", version)),
+    ]
+
+
+TERMINAL_TOOLS = {"lint_check", "cli_help", "api_version_diff"}
+
+# `find_examples` and `suggest_pattern` empty-input sentinels are intentional
+# user-error messages that bypass the tree grammar — exclude them from the
+# strict grammar / next-step tests. Their normal-path output IS tree-shaped
+# but reproducing it here would require seeded pgvector embeddings.
+SENTINEL_EDGE_CASES = {"find_examples", "suggest_pattern"}
+
+
+def _tool_invocation_count() -> int:
+    """Return the number of (tool_name, callable) pairs in _all_tool_invocations.
+
+    Used to drive parametrize so the count stays in sync with the actual tool
+    list — no hardcoded magic number.  We pass a dummy version here; only the
+    list length matters at collection time (no DB call is made).
+    """
+    # Use a dummy version string; _all_tool_invocations builds lambdas that
+    # capture the version but doesn't execute any queries at construction time.
+    return len(_all_tool_invocations("_count_only_"))
+
+
+@pytest.mark.parametrize("idx", range(_tool_invocation_count()))
+def test_grammar_consistency_all_tools(grammar_seed, idx):
+    """For every MCP tool: header line + valid connector positions.
+
+    Grammar rules (ADR-0023 §1):
+    - The first non-banner line is the header (no ├─ / └─).
+    - Every subsequent line either starts with a connector at column 0, or
+      with a sublist indent (``│   `` or ``    ``) followed by a connector,
+      or is the truncation tail (``... and N more``), or is a known
+      informational banner (V0 lint matcher / spec curation status).
+    - No two consecutive ``└─`` branches at column 0.
+
+    SENTINEL_EDGE_CASES are exempt: their empty-input branches return plain
+    error messages that intentionally fall outside the tree contract.
+    """
+    version = grammar_seed
+    invocations = _all_tool_invocations(version)
+    tool_name, fn = invocations[idx]
+    if tool_name in SENTINEL_EDGE_CASES:
+        pytest.skip(
+            f"{tool_name} empty-input returns a user-error sentinel — exempt"
+        )
+    out = fn()
+    lines = out.splitlines()
+    assert lines, f"{tool_name}: output is empty"
+
+    # Strip leading informational banners (V0 lint matcher, curate status).
+    def _is_banner(line: str) -> bool:
+        return (
+            "V0 fuzzy matcher" in line
+            or "Spec data" in line
+            and "pending curation" in line
+        )
+
+    header_idx = 0
+    while header_idx < len(lines) and _is_banner(lines[header_idx]):
+        header_idx += 1
+    assert header_idx < len(lines), (
+        f"{tool_name}: no header after banner lines:\n{out}"
+    )
+    # Header — must NOT start with a tree connector.
+    assert not lines[header_idx].lstrip().startswith(("├─", "└─")), (
+        f"{tool_name}: header line uses tree connector — got"
+        f" {lines[header_idx]!r}"
+    )
+
+    # Allowed prefixes for non-header lines.
+    allowed_starts = ("├─", "└─", "│   ├─", "│   └─", "    ├─", "    └─",
+                      "│   │   ├─", "│   │   └─", "│   │   │   ├─",
+                      "│   │   │   └─", "│   │   │   │   ├─",
+                      "│   │   │   │   └─", "│   │   │       ├─",
+                      "│   │   │       └─", "│       ├─", "│       └─",
+                      "        ├─", "        └─")
+
+    for i, line in enumerate(lines[header_idx + 1:], start=header_idx + 1):
+        if not line.strip():
+            continue
+        if _is_banner(line):
+            continue
+        # Truncation tail produced by _render_capped — still a valid grammar
+        # element (it is rendered inside a tree branch so the surrounding
+        # branch carries the connector). Allow as bare line.
+        if line.lstrip().startswith("..."):
+            continue
+        # Indented data continuation lines (suggest_pattern snippet, etc.).
+        if line.startswith("        ") and not line.lstrip().startswith(
+            ("├─", "└─"),
+        ):
+            continue
+        # The bulk of well-formed lines start with one of the allowed prefixes.
+        assert line.startswith(allowed_starts), (
+            f"{tool_name} line {i} has bad prefix:\n  {line!r}\n"
+            f"Full output:\n{out}"
+        )
+
+    # No two consecutive lines like ``└─ X`` / ``└─ Y`` at column 0
+    # (a └─ closes its parent; another └─ at the same level breaks shape).
+    prev_was_root_last = False
+    for line in lines[header_idx + 1:]:
+        is_root_last = line.startswith("└─")
+        if prev_was_root_last and is_root_last:
+            raise AssertionError(
+                f"{tool_name}: two consecutive '└─' branches at column 0 — "
+                f"invalid tree shape:\n{out}"
+            )
+        prev_was_root_last = is_root_last
+
+
+# ===========================================================================
+# Next-step footer test — 18 drill-down MUST emit, 3 terminal MUST NOT emit.
+# ===========================================================================
+
+
+def test_next_step_footer_present(grammar_seed):
+    """Each drill-down tool's normal output MUST contain ``└─ Next:``.
+
+    Per ADR-0023 §4.3 the 18 drill-down tools emit ``└─ Next:`` either as the
+    last line or, on empty-result branches, somewhere in the output. The two
+    sentinel edge cases (``find_examples`` / ``suggest_pattern`` empty input)
+    are exempt — they emit a user-error message, not a drill-down tree.
+    """
+    version = grammar_seed
+    invocations = dict(_all_tool_invocations(version))
+    must_emit = [
+        name for name, _ in _all_tool_invocations(version)
+        if name not in TERMINAL_TOOLS and name not in SENTINEL_EDGE_CASES
+    ]
+    failures: list[str] = []
+    for name in must_emit:
+        out = invocations[name]()
+        last = out.rstrip().splitlines()[-1]
+        # Either the last line is ``└─ Next:`` OR the output contains a
+        # ``└─ Next:`` line (some tools emit Next: as a non-final branch when
+        # they append closing warning/banner lines).
+        if not (last.startswith("└─ Next:") or "└─ Next:" in out):
+            failures.append(f"{name}: missing └─ Next: (last line: {last!r})")
+    assert not failures, "\n".join(failures)
+
+
+def test_next_step_footer_absent(grammar_seed):
+    """Terminal tools (lint_check, cli_help, api_version_diff) MUST NOT emit
+    a ``└─ Next:`` footer — they are pure terminal artifacts (ADR-0023 §4.4)."""
+    version = grammar_seed
+    invocations = dict(_all_tool_invocations(version))
+    for name in TERMINAL_TOOLS:
+        out = invocations[name]()
+        assert "└─ Next:" not in out, (
+            f"Terminal tool {name} unexpectedly emits '└─ Next:' footer:\n{out}"
+        )
+
+
+# ===========================================================================
+# Language policy test — static template strings inside server.py functions
+# must not contain Vietnamese diacritics (ADR-0023 §2). Docstrings exempt.
+# ===========================================================================
+
+
+def test_language_policy_static_templates():
+    """Walk server.py via ast; every string Constant inside a function body
+    (excluding the first stmt when it's a docstring) must not match
+    ``[À-ỹ]`` — that range covers Vietnamese diacritics + Latin Extended."""
+    import ast
+    import re
+    from pathlib import Path
+
+    src_path = Path(__file__).parent.parent / "src" / "mcp" / "server.py"
+    tree = ast.parse(src_path.read_text(encoding="utf-8"))
+    vi_re = re.compile(r"[À-ỹ]")
+
+    violations: list[tuple[str, int, str]] = []
+
+    def _walk_function(node, fname: str) -> None:
+        body = list(node.body)
+        # Drop a leading docstring (Expr → Constant str) — per ADR-0023 §2
+        # docstrings exempt because they hold EN+VI TRIGGER patterns.
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body = body[1:]
+        for stmt in body:
+            for child in ast.walk(stmt):
+                if (
+                    isinstance(child, ast.Constant)
+                    and isinstance(child.value, str)
+                    and vi_re.search(child.value)
+                ):
+                    preview = child.value.replace("\n", " ")[:60]
+                    violations.append((fname, child.lineno, preview))
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _walk_function(node, node.name)
+
+    assert not violations, (
+        "ADR-0023 §2 language policy violations (Vietnamese diacritics in "
+        "static template strings):\n"
+        + "\n".join(f"  {fn}:{lineno}: {prev!r}" for fn, lineno, prev in violations)
+    )
+
+
+# ===========================================================================
+# ADR-0023 §4.2 — Next-step self-loop guard
+# ===========================================================================
+
+
+@pytest.mark.parametrize("idx", range(_tool_invocation_count()))
+def test_next_step_no_loop(grammar_seed, idx):
+    """ADR-0023 §4.2: a tool's ``Next:`` hint MUST NOT reference itself.
+
+    Loop = self-reference (same tool name); drill-down = different tool. OK.
+    Terminal tools and sentinel edge-cases are exempt (they have no Next:).
+    """
+    version = grammar_seed
+    invocations = _all_tool_invocations(version)
+    name, fn = invocations[idx]
+
+    if name in TERMINAL_TOOLS or name in SENTINEL_EDGE_CASES:
+        pytest.skip(f"{name} is terminal/sentinel — no Next: expected, exempt")
+
+    out = fn()
+
+    # Collect all lines that contain ``Next:``
+    next_lines = [ln for ln in out.splitlines() if "Next:" in ln]
+    if not next_lines:
+        # Should not happen for drill-down tools, but don't double-fail here —
+        # test_next_step_footer_present already covers that contract.
+        return
+
+    for line in next_lines:
+        # Extract the hint payload after "Next: "
+        if "Next:" in line:
+            payload = line.split("Next:", 1)[1].strip()
+        else:
+            continue
+        # Split on pipe (multiple hints) and check each
+        for hint in payload.split("|"):
+            hint = hint.strip()
+            # Tool name is everything before the first '('
+            if "(" in hint:
+                tool_called = hint.split("(", 1)[0].strip()
+            else:
+                tool_called = hint.strip()
+            assert tool_called != name, (
+                f"Tool '{name}' suggests itself in Next: footer — "
+                f"self-loop violates ADR-0023 §4.2.\n"
+                f"  Offending line: {line!r}"
+            )
+
+
+# ===========================================================================
+# ADR-0023 §5.3 — list_owl_components bound_model warning footer
+# ===========================================================================
+
+
+def test_list_owl_components_bound_model_warning(neo4j_driver):
+    """``_list_owl_components(bound_model=X)`` emits the heuristic warning.
+
+    Per ADR-0023 §5.3: when ``bound_model`` filter is applied, the tool must
+    emit ``Warning: bound_model resolution is heuristic`` because
+    parser_js.py:415 uses a fuzzy heuristic that may miss components with
+    dynamic ``this.props.resModel``.
+    """
+    _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
+    try:
+        seed_owl_components(
+            neo4j_driver, module="sale_management",
+            odoo_version=W6_LIST_OWL_VERSION,
+            components=[
+                {"name": "SaleOrderKanban", "bound_model": "sale.order",
+                 "template": "tmpl_a"},
+            ],
+        )
+        srv = _import_server_module()
+        out = srv._list_owl_components(
+            "sale_management", W6_LIST_OWL_VERSION,
+            bound_model="sale.order",
+        )
+        assert "Warning: bound_model resolution is heuristic" in out, (
+            f"Expected heuristic warning when bound_model filter is set.\n"
+            f"Got:\n{out}"
+        )
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_OWL_VERSION)
