@@ -145,17 +145,32 @@ async def update_profile(
     """Update name, version, and/or description for an existing profile.
 
     - 404 if profile not found.
-    - 409 if new name conflicts with an existing profile (UNIQUE).
-    - 422 if new version conflicts with a descendant profile version (ADR-0016).
+    - 409 if new name conflicts with an existing profile (UNIQUE), or if profile
+      has indexed repos and name/version change is requested (re-index required).
+    - 422 if new version conflicts with a descendant or ancestor profile version
+      (ADR-0016).
     - 200 + updated_fields list on success.
     """
     try:
         from src.db.exceptions import (
+            ProfileIndexedError,
             ProfileNameConflictError,
             ProfileNotFoundError,
             ProfileVersionMismatchError,
         )
         from src.db.pg import repo_store
+
+        # Capture before-snapshot for forensic audit detail (non-sensitive fields only)
+        existing = repo_store().get_profile_by_id(profile_id)
+        if existing is not None:
+            try:
+                request.state.audit_detail["before"] = {
+                    "name": existing.get("name"),
+                    "odoo_version": existing.get("odoo_version"),
+                    "description": existing.get("description"),
+                }
+            except Exception:
+                pass
 
         updated_fields = repo_store().update_profile(
             profile_id,
@@ -163,14 +178,32 @@ async def update_profile(
             version=body.version,
             description=body.description,
         )
+
+        # Capture after-snapshot
+        try:
+            after: dict = {}
+            if body.name is not None:
+                after["name"] = body.name
+            if body.version is not None:
+                after["odoo_version"] = body.version
+            if body.description is not None:
+                after["description"] = body.description
+            request.state.audit_detail["after"] = after
+            request.state.audit_detail["updated_fields"] = updated_fields
+        except Exception:
+            pass
+
     except ProfileNotFoundError as e:
         _logger.warning("Update profile: not found: %s", e)
         raise HTTPException(status_code=404, detail="Profile not found")
     except ProfileNameConflictError as e:
         _logger.warning("Update profile: name conflict: %s", e)
         raise HTTPException(status_code=409, detail=str(e))
+    except ProfileIndexedError as e:
+        _logger.warning("Update profile: indexed repos block change: %s", e)
+        raise HTTPException(status_code=409, detail=str(e))
     except ProfileVersionMismatchError as e:
-        _logger.warning("Update profile: version mismatch with descendants: %s", e)
+        _logger.warning("Update profile: version mismatch: %s", e)
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         _logger.warning("Update profile %s failed: %s", profile_id, e)
@@ -509,6 +542,17 @@ async def update_repo(repo_id: int, body: UpdateRepoBody, request: Request):
         if existing is None:
             return JSONResponse(_json_safe({"error": "Repo not found."}), status_code=404)
 
+        # Capture before-snapshot for forensic audit detail (non-sensitive fields only)
+        try:
+            request.state.audit_detail["before"] = {
+                "url": existing.get("url"),
+                "branch": existing.get("branch"),
+                "ssh_key_id": existing.get("ssh_key_id"),
+                "local_path": existing.get("local_path"),
+            }
+        except Exception:
+            pass
+
         effective_url = body.url if body.url is not None else existing["url"]
         effective_ssh_key_id = existing.get("ssh_key_id")
         if body.clear_ssh_key:
@@ -532,6 +576,24 @@ async def update_repo(repo_id: int, body: UpdateRepoBody, request: Request):
             clear_ssh_key=body.clear_ssh_key,
             local_path=body.local_path,
         )
+
+        # Capture after-snapshot — only fields that changed
+        try:
+            after: dict = {}
+            if body.url is not None:
+                after["url"] = body.url
+            if body.branch is not None:
+                after["branch"] = body.branch
+            if body.clear_ssh_key:
+                after["ssh_key_id"] = None
+            elif body.ssh_key_id is not None:
+                after["ssh_key_id"] = body.ssh_key_id
+            if body.local_path is not None:
+                after["local_path"] = body.local_path
+            request.state.audit_detail["after"] = after
+            request.state.audit_detail["updated_fields"] = updated_fields
+        except Exception:
+            pass
 
     except RepoNotFoundError:
         return JSONResponse(_json_safe({"error": "Repo not found."}), status_code=404)

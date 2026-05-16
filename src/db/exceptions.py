@@ -29,3 +29,11 @@ class RepoNotFoundError(KeyError):
 
 class RepoConflictError(ValueError):
     """Raised when a repo update would violate the UNIQUE(url, branch) constraint."""
+
+
+class ProfileIndexedError(ValueError):
+    """Raised when a profile has indexed repos and the requested field change would
+    invalidate their Neo4j data (name or version change requires full re-index).
+
+    HTTP mapping: 409 Conflict.
+    """

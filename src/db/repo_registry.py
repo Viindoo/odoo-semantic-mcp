@@ -6,6 +6,7 @@ import psycopg2.errors
 
 from src.db.exceptions import (
     ProfileCycleError,
+    ProfileIndexedError,
     ProfileNameConflictError,
     ProfileNotFoundError,
     ProfileVersionMismatchError,
@@ -201,6 +202,21 @@ class RepoStore:
                 raise ProfileNotFoundError(f"profile id={profile_id} not found")
         return rowcount > 0
 
+    def _has_indexed_repos(self, profile_id: int) -> int:
+        """Return the count of indexed repos for a profile (head_sha IS NOT NULL).
+
+        A non-zero count means the profile has Neo4j/pgvector data keyed to its
+        current name *and* version — changing either field requires re-indexing.
+        """
+        with self._pool.checkout() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM repos "
+                    "WHERE profile_id = %s AND head_sha IS NOT NULL",
+                    (profile_id,),
+                )
+                return cur.fetchone()[0]
+
     def update_profile(
         self,
         profile_id: int,
@@ -217,17 +233,59 @@ class RepoStore:
         Raises:
             ProfileNotFoundError  — profile_id does not exist.
             ProfileNameConflictError — new name already taken (UNIQUE).
-            ProfileVersionMismatchError — new version conflicts with a descendant.
+            ProfileVersionMismatchError — new version conflicts with a descendant or ancestor.
+            ProfileIndexedError — profile has indexed repos; name/version change blocked
+                until re-indexed (HTTP 409).
         """
         # Load current profile
         current = self.get_profile_by_id(profile_id)
         if current is None:
             raise ProfileNotFoundError(f"profile id={profile_id} not found")
 
+        # Critical 2: Guard name/version changes when profile has indexed repos.
+        # Neo4j Module.profile is a name string array — both name and version changes
+        # cause stale graph data until a full re-index is run.
+        name_changing = name is not None and name != current["name"]
+        version_changing = version is not None and version != current["odoo_version"]
+
+        if name_changing or version_changing:
+            indexed_count = self._has_indexed_repos(profile_id)
+            if indexed_count > 0:
+                changed_fields = []
+                if name_changing:
+                    changed_fields.append("name")
+                if version_changing:
+                    changed_fields.append("version")
+                fields_str = " and ".join(changed_fields)
+                raise ProfileIndexedError(
+                    f"Profile id={profile_id} has {indexed_count} indexed repo(s). "
+                    f"Re-indexing required before {fields_str} change. "
+                    f"Delete + recreate profile or trigger full reindex."
+                )
+
+        # Critical 1: If changing version, check ancestors for version mismatch.
+        # This prevents a profile with no descendants from being moved to a version
+        # incompatible with its parent.
+        if version_changing:
+            parent_id = current.get("parent_profile_id")
+            if parent_id is not None:
+                with self._pool.checkout() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT odoo_version FROM profiles WHERE id = %s",
+                            (parent_id,),
+                        )
+                        parent_row = cur.fetchone()
+                if parent_row is not None and parent_row[0] != version:
+                    raise ProfileVersionMismatchError(
+                        f"Cannot change version to {version!r}: parent profile "
+                        f"id={parent_id} has version {parent_row[0]!r}"
+                    )
+
         # If changing version, check all descendants share the same current version.
         # Descendants inherit version from the ancestor hierarchy (ADR-0016), so
         # any descendant with a *different* version would become inconsistent.
-        if version is not None and version != current["odoo_version"]:
+        if version_changing:
             with self._pool.checkout() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -689,8 +747,16 @@ class RepoStore:
         params.append(repo_id)
         sql = f"UPDATE repos SET {', '.join(set_parts)} WHERE id = %s"
 
-        with self._pool.checkout() as conn:
-            self._pool.execute(conn, sql, tuple(params))
+        try:
+            with self._pool.checkout() as conn:
+                self._pool.execute(conn, sql, tuple(params))
+        except psycopg2.errors.UniqueViolation as e:
+            # Safety net for TOCTOU race: pre-check can pass while a concurrent
+            # UPDATE commits the same (url, branch) between our SELECT and UPDATE.
+            raise RepoConflictError(
+                f"A repo with url={effective_url!r} branch={effective_branch!r} "
+                f"already exists (concurrent write)"
+            ) from e
 
         return updated_fields
 
