@@ -4,20 +4,24 @@
 # Docs: https://caddyserver.com/docs/caddyfile/directives/reverse_proxy
 
 semantic.example.com {
-    # Security headers — transport / framing / sniffing / referrer only.
-    # Content-Security-Policy + Permissions-Policy are OWNED BY THE APPLICATION
-    # MIDDLEWARE (Astro `site/src/middleware.ts` + FastAPI
-    # `src/web_ui/app.py::_SecurityHeadersMiddleware`). DO NOT add CSP or
-    # Permissions-Policy here — per W3C CSP3 §4.1 multiple CSP headers are
-    # intersected (most restrictive wins per directive), so an edge CSP would
-    # silently strip the hCaptcha origins / `unsafe-inline` that the
-    # middleware grants on a per-path basis. See nginx-m8.conf for the full
-    # rationale.
+    # Security headers.
+    # CSP composition: the application middleware (Astro `site/src/middleware.ts`
+    # + FastAPI `_SecurityHeadersMiddleware`) emits a tighter, per-path CSP on
+    # SSR responses. Per W3C CSP3 §4.1 multiple CSP headers are intersected per
+    # directive (most restrictive wins), so the edge CSP below is intentionally
+    # a PERMISSIVE SUPERSET of every grant the middleware ever makes —
+    # otherwise the edge would silently strip middleware-granted permissions
+    # (e.g. hCaptcha origins on /signup, 'unsafe-inline' inline modules on
+    # admin pages). Prerendered routes (/, /pricing, /bootstrap, /benchmarks)
+    # do not run through middleware, so this edge CSP is their only CSP.
+    # See `docs/deploy/nginx-m8.conf` for the full rationale.
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Frame-Options "DENY"
         X-Content-Type-Options "nosniff"
         Referrer-Policy "no-referrer"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://js.hcaptcha.com https://newassets.hcaptcha.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.hcaptcha.com https://newassets.hcaptcha.com; frame-src 'self' https://newassets.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+        Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
         # Remove server identification header
         -Server
     }

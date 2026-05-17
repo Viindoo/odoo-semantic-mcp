@@ -80,16 +80,18 @@ class TestSignupCspHcaptcha:
 
 
 class TestNonHcaptchaPathsDoNotLeakAllowlist:
-    """Verify the hCaptcha allowlist is scoped to /signup only — no over-grant."""
+    """Verify the hCaptcha allowlist is scoped to /signup only — no over-grant.
 
-    def test_landing_csp_does_not_include_hcaptcha(self, astro_server):
-        csp = _get_headers(f"{astro_server}/")["content-security-policy"]
-        # Spot-check all 3 hCaptcha origins
-        assert "js.hcaptcha.com" not in csp, (
-            f"hCaptcha origin must NOT appear on /; CSP leaks third-party allowlist: {csp!r}"
-        )
-        assert "api.hcaptcha.com" not in csp
-        assert "newassets.hcaptcha.com" not in csp
+    Note: `/` (landing), `/pricing`, `/bootstrap`, `/benchmarks` are
+    `export const prerender = true` — Astro emits them as static files
+    at build time and the Node adapter serves them from `dist/client/`
+    WITHOUT invoking middleware. So the per-path CSP only matters for
+    SSR pages (`/admin/*`, `/signup`, `/verify-email`, `/reset-password`).
+    In production, prerendered pages still get a baseline CSP from
+    nginx (see `docs/deploy/nginx-m8.conf`) which is a permissive
+    superset designed to intersect safely with the middleware CSP per
+    W3C CSP3 §4.1. The tests below only assert the SSR-side guarantee.
+    """
 
     def test_admin_login_csp_does_not_include_hcaptcha(self, astro_server):
         csp = _get_headers(f"{astro_server}/admin/login")["content-security-policy"]
@@ -99,9 +101,9 @@ class TestNonHcaptchaPathsDoNotLeakAllowlist:
         assert "api.hcaptcha.com" not in csp
         assert "newassets.hcaptcha.com" not in csp
 
-    def test_landing_csp_still_has_default_directives(self, astro_server):
-        """Sanity: even without hCaptcha, landing CSP must have the base directives."""
-        csp = _get_headers(f"{astro_server}/")["content-security-policy"]
+    def test_admin_login_csp_still_has_default_directives(self, astro_server):
+        """Sanity: even without hCaptcha, admin CSP must have the base directives."""
+        csp = _get_headers(f"{astro_server}/admin/login")["content-security-policy"]
         assert "default-src 'self'" in csp
         assert "frame-ancestors 'none'" in csp
         assert "form-action 'self'" in csp
