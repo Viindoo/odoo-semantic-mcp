@@ -116,6 +116,17 @@ async function requireAdmin(cookieHeader: string): Promise<{ ok: boolean; userna
 export const onRequest = defineMiddleware(async (context, next) => {
   const path = context.url.pathname;
 
+  // Local helper: wrap context.redirect() so the 3xx response also carries
+  // CSP + Permissions-Policy. Security scanners flag 3xx responses without
+  // these headers even though browsers will apply the destination page's
+  // CSP after the redirect. Doing it once here keeps every redirect site
+  // consistent.
+  const _redirectWithHeaders = (location: string): Response => {
+    const r = context.redirect(location);
+    _addSecurityHeaders(r, path);
+    return r;
+  };
+
   // Public pages: never require admin auth — but always inject security headers.
   if (_PUBLIC_PATHS.has(path)) {
     const response = await next();
@@ -145,9 +156,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
     if (!adminPayload) {
       // Not logged in → redirect to login; logged in but not admin → 403 redirect to dashboard.
       const sessionPayload = await verifySession(cookieHeader);
-      if (!sessionPayload || !sessionPayload.ok) return context.redirect('/admin/login');
+      if (!sessionPayload || !sessionPayload.ok) return _redirectWithHeaders('/admin/login');
       // Authenticated but not admin → dashboard with a flash (query param for UX)
-      return context.redirect('/admin?error=admin_required');
+      return _redirectWithHeaders('/admin?error=admin_required');
     }
     const response = await next();
     _addSecurityHeaders(response, path);
@@ -159,7 +170,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
   // bubble up as an unhandled 500 from Astro SSR. `fetch` throws on connection
   // refused, so we wrap in try/catch and treat failure as "unauthenticated".
   const sessionPayload = await verifySession(cookieHeader);
-  if (!sessionPayload || !sessionPayload.ok) return context.redirect('/admin/login');
+  if (!sessionPayload || !sessionPayload.ok) return _redirectWithHeaders('/admin/login');
   const response = await next();
   _addSecurityHeaders(response);
   return response;
