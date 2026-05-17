@@ -10,7 +10,14 @@ const _PUBLIC_PATHS = new Set(['/signup', '/verify-email', '/reset-password']);
  * https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy
  * https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Permissions-Policy
  *
- * script-src 'self' — Astro emits external script files, not inline scripts.
+ * script-src 'self' 'unsafe-inline' — Astro SSR inlines <script> blocks from
+ *   .astro pages as `<script type="module">…</script>` (no src= attribute) when
+ *   the script is small enough that Vite's inlining threshold is met. Without
+ *   'unsafe-inline', those inline module scripts are blocked and all click/submit
+ *   handlers become no-ops (login-error stays hidden, API-key modal never opens,
+ *   SSH-key banner never appears). 'self' alone only allows external /_astro/*.js
+ *   files. TODO: migrate to per-request nonce injection once Astro exposes a
+ *   first-class CSP nonce API so 'unsafe-inline' can be removed.
  * style-src 'unsafe-inline' — Tailwind utility classes are often inlined at build time.
  * connect-src 'self' — React islands fetch /api/* via same-origin proxy.
  * form-action 'self' — OAuth redirect is browser navigation, NOT a form submit;
@@ -19,7 +26,7 @@ const _PUBLIC_PATHS = new Set(['/signup', '/verify-email', '/reset-password']);
 function _addSecurityHeaders(response: Response): void {
   response.headers.set('Content-Security-Policy', [
     "default-src 'self'",
-    "script-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https:",
     "font-src 'self'",
