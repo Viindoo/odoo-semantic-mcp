@@ -13,7 +13,7 @@ All notable changes to Odoo Semantic MCP are documented here.
 - CLIFlag static curation v8-v19: 12 `spec_data/cli_flags_X.json` populated with ~880 flags + schema + cross-version deprecation tracking. (WI-A5)
 
 ### Fixed
-- v8 era1 `_columns` extraction: string-aware brace scan no longer truncates blocks at `{` inside string literals. Recovers ~1,158 missing fields. `FieldInfo.source_definition` now populated for era1. (WI-A2)
+- v8 era1 `_columns` extraction: string-aware brace scan no longer truncates blocks at `{` inside string literals. `FieldInfo.source_definition` now populated for era1. (WI-A2)
 
 ### Notes
 - Post-deploy ops B1-B11 (CoreSymbol/LintRule/CLI ingestion runs, OBS-1 reindex, viindoo_internal_19 registration, full reindex for CSS/SCSS embeddings) tracked in plan `streamed-cuddling-phoenix.md`.

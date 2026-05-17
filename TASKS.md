@@ -565,7 +565,7 @@ Two bug patterns surfaced twice during M8 — encode as automated lint to preven
 
 - [x] **WI-A2** v8 era1 `_columns` balanced-paren extraction fix (commit 1d0e8dd)
   - Fixed string-aware brace scan — no longer truncates at `{` inside string literals
-  - Recovers ~1,158 missing fields (Neo4j 8,341 vs pgvector 7,183 gap closed)
+  - Closes the v8 era1 field extraction gap (previously truncated when help text contained `{`)
   - `FieldInfo.source_definition` now populated for era1 fields
   - 9 new tests
 
