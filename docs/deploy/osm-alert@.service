@@ -1,7 +1,7 @@
 # osm-alert@.service — fan-out alert pattern triggered by OnFailure=
 # Đặt tại: /etc/systemd/system/osm-alert@.service
 #
-# Hook: any unit with `OnFailure=osm-alert@%n.service` will instance this
+# Hook: any unit with `OnFailure=osm-alert@%n` will instance this
 # template, passing its own unit name as `%i`. Example: when
 # `odoo-semantic-mcp.service` enters `failed` state, systemd starts
 # `osm-alert@.service`.

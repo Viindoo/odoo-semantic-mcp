@@ -125,7 +125,7 @@ Two new touchpoints for ops:
 ## Alert wiring (OnFailure=osm-alert@%n)
 
 Every shipped systemd unit (`odoo-semantic-{mcp,webui,astro,backup}`)
-has `OnFailure=osm-alert@%n.service`. The pattern unit
+has `OnFailure=osm-alert@%n`. The pattern unit
 `osm-alert@.service` ships with a journal-only default — to wire real
 notifications (email, Slack webhook, PagerDuty), edit its `ExecStart=`
 to call your notifier and keep the `osm-alert:` log prefix so scrapers
