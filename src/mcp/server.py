@@ -2011,7 +2011,7 @@ def find_deprecated_usage(
         odoo_version: e.g. '17.0', '18.0'. Default 'auto'.
         kind: Optional filter — restrict to one CoreSymbol.kind
             (e.g. 'orm_method', 'function').
-        profile_name: Optional profile filter (e.g. 'internal_profile_17').
+        profile_name: Optional profile filter (e.g. 'my_profile').
             When set, only Method nodes whose profile array contains this name
             are scanned. Default None scans across all profiles.
 
@@ -4059,7 +4059,7 @@ def check_module_exists(
     Args:
         name: Module technical name (e.g. 'sale', 'helpdesk', 'viin_helpdesk').
         odoo_version: '17.0' / '18.0' / 'auto'.
-        profile_name: Optional profile filter (e.g. 'internal_profile_17').
+        profile_name: Optional profile filter (e.g. 'my_profile').
             When set, only Module nodes whose profile array contains this name
             are checked. Default None checks across all profiles.
 
@@ -5258,7 +5258,7 @@ def set_active_profile(profile_name: str | None) -> ToolResult:
     profile_name= explicitly to each call instead.
 
     Args:
-        profile_name: Profile name such as 'internal_profile_17' or
+        profile_name: Profile name such as 'internal_17' or
             'my-erp-prod'. Pass null / None to clear the active profile
             (subsequent calls revert to cross-profile queries).
 
@@ -5341,7 +5341,7 @@ def list_available_profiles() -> ToolResult:
     Returns:
         Tree listing of registered profiles with their Odoo version, e.g.:
         Registered profiles (2 total):
-        ├─ internal_profile_17  (17.0)
+        ├─ my_profile_17  (17.0)
         └─ customer_erp_16      (16.0)
     """
     sql = "SELECT name, odoo_version FROM profiles ORDER BY name"

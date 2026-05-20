@@ -2,6 +2,11 @@
 
 All notable changes to Odoo Semantic MCP are documented here.
 
+## [Unreleased] — 2026-05-20 — Security: purge internal deployment data
+
+### Security
+- [SECURITY] Purged private Viindoo deployment topology (private repo names, seed roster, version presets) from the public repository. Master-data seed roster removed; profiles and repos are now created by admins via the web UI or JSON API. History rewrite applied.
+
 ## [Unreleased] — 2026-05-20 — Open-core repo split + AGPL license metadata
 
 ### Changed
@@ -15,10 +20,10 @@ All notable changes to Odoo Semantic MCP are documented here.
 
 #### Added
 - `migrations/0004_add_missing_version_profiles.sql` seeds all 12 root CE profiles (`odoo_8` through `odoo_19`) with `ON CONFLICT (name) DO NOTHING`. SQL is self-contained for DBA-only rescue paths (no Python required).
-- `src/db/seed_master_data.py` remains source of truth and still covers Viindoo addon profiles (`standard_profile_*`, `internal_profile_*`) which require 2-pass FK inserts.
+- `src/db/seed_master_data.py` remains source of truth for the CE root profiles and still handles 2-pass FK inserts for hierarchical profiles.
 
 #### Tests
-- Profile-touching tests migrated to distinct test names (`test_root_99`, `test_mid_99`, `test_leaf_99` at version 99.0) or switched to `standard_profile_17` (Python-seeder only) for conflict-test scenarios.
+- Profile-touching tests migrated to distinct test names (`test_root_99`, `test_mid_99`, `test_leaf_99` at version 99.0) or switched to a seeder-only fixture profile for conflict-test scenarios.
 - Seed count assertion in `test_master_data_seed.py` bumped 5 → 12.
 
 ### Security headers — CSP + Permissions-Policy (PR #118)
@@ -94,7 +99,7 @@ All notable changes to Odoo Semantic MCP are documented here.
 - v8 era1 `_columns` extraction: string-aware brace scan no longer truncates blocks at `{` inside string literals. `FieldInfo.source_definition` now populated for era1. (WI-A2)
 
 #### Notes
-- Post-deploy ops B1-B11 (CoreSymbol/LintRule/CLI ingestion runs, OBS-1 reindex, internal_profile_19 registration, full reindex for CSS/SCSS embeddings) tracked in plan `internal-plan.md`.
+- Post-deploy ops B1-B11 (CoreSymbol/LintRule/CLI ingestion runs, OBS-1 reindex, additional profile registration, full reindex for CSS/SCSS embeddings) tracked in the post-deploy ops plan.
 - WI-A7 (deferred items absorption into TASKS.md M10/M10.5/M11 + ADR follow-up sections) pending Opus dispatch.
 
 ### Pre-launch checklist signoff (PR #121, docs only)

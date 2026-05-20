@@ -367,8 +367,8 @@ Mục tiêu: thực thi THESIS của M6 — "Re-index chỉ mất vài giây. In
 
 **M8/M9 backlog from hotfix discoveries (2026-05-14):**
 
-- [~] **Profile + core index gap v9-v19 (OBS-1):** Profiles for v13/14/15/16/19 are already declared in `_PROFILE_DEFS` (covers all 26 v8-v19 profiles); prod DBs missing them just need a re-run of `python -m src.db.migrate` (which calls `seed_all()` idempotently) or `python -m src.manager seed-master-data`. **NOTE:** an earlier draft of this work introduced `migrations/0004_add_missing_version_profiles.sql` as belt-and-suspenders; it was removed because it violated the schema-only yoyo-migration contract (see `src/db/migrate.py` docstring and `src/db/seed_master_data.py` line 8-14) and broke 16 integration tests that assume `run_migrations()` leaves the profiles table empty. Phase 3 indexer commands in `coverage-report.md`. v10/11/12 profiles existed before OBS-1 (seeder was always complete). Remaining: run indexer in Phase 3 + register local repo paths via webui if using `/home/user/git/odoo_<N>.0/` instead of auto-clone paths.
-- [ ] **v18 source repo missing (OBS-1 deferred):** `odoo_18.0` not on disk as of 2026-05-15. Register via admin webui SSH auto-clone (ADR-0008) — clones automatically. Once cloned, run `index-repo --profile odoo_18`. See `coverage-report.md` for SSH clone command.
+- [~] **Profile + core index gap v9-v19 (OBS-1):** Profiles for v13/14/15/16/19 need to be created by the admin via the web UI or `python -m src.manager add-profile ...`; prod DBs missing them just need a re-run of `python -m src.db.migrate` for schema, then profile creation. **NOTE:** an earlier draft of this work introduced `migrations/0004_add_missing_version_profiles.sql` as belt-and-suspenders; it was removed because it violated the schema-only yoyo-migration contract (see `src/db/migrate.py` docstring and `src/db/seed_master_data.py` line 8-14) and broke 16 integration tests that assume `run_migrations()` leaves the profiles table empty. v10/11/12 profiles existed before OBS-1 (seeder was always complete). Remaining: run indexer per version + register local repo paths via webui if using `/home/user/git/odoo_<N>.0/` instead of auto-clone paths.
+- [ ] **v18 source repo missing (OBS-1 deferred):** `odoo_18.0` not on disk as of 2026-05-15. Register via admin webui SSH auto-clone (ADR-0008) — clones automatically. Once cloned, run `index-repo --profile odoo_18`.
 - [ ] **v8 parser limitation:** `index-core --version 8.0` writes 167 CoreSymbol but 0 CLIFlag/LintRule — era1 (openerp-server) CLI structure not handled. Extend `parser_cli.py` for era1.
 - [ ] **Admin UI core-index status column [P3 UX]:** Admin `/repos` page only shows MODULE index status (`indexed/error/pending` from Postgres `repos.status`). Add column or badge for CORE index status per version (CoreSymbol count > 0). Prevents user confusion that "v17 indexed" implies core index complete.
 - [ ] **Cleanup test artifact:** `MATCH (m:Module {odoo_version: '96.0', name: 'snap_mod', module_name: NULL}) DETACH DELETE m` — one anomalous node from test run leaking into production Neo4j.
@@ -584,7 +584,7 @@ Two bug patterns surfaced twice during M8 — encode as automated lint to preven
 
 ## Milestone 9 Coverage Fill — 2026-05-17
 
-**Batch name:** `coverage-fill-batch` (6 WIs orchestrated via plan `internal-plan.md`)
+**Batch name:** `coverage-fill-batch` (6 WIs)
 
 - [x] **WI-A1** CSS/SCSS parser + `:Stylesheet` node + `:IMPORTS` edge + ADR-0025 (commit 6db163e)
   - New `src/indexer/parser_css.py` (430 LoC) + `parser_scss.py` (441 LoC) — tree-sitter-css backend + regex fallback
@@ -622,7 +622,7 @@ Two bug patterns surfaced twice during M8 — encode as automated lint to preven
 - [x] **WI-A7** Deferred items absorption (commit landed with PR #120 squash)
   - Cross-document reasoning placed 10 deferred items into M10/M10.5/M11 sections below + ADR-0025 Future Work + ADR-0023/ADR-0010 follow-up notes
 
-**Post-deploy ops (B1–B11) tracked separately — see plan section "Group B" of `internal-plan.md`.**
+**Post-deploy ops (B1–B11) tracked separately in the Group B post-deploy ops table below.**
 
 ### Post-deploy hotfixes (2026-05-18)
 
@@ -638,10 +638,10 @@ Two prod CLI bugs surfaced when Group B operations ran against the deployed code
 | B1 v18 odoo source auto-clone | ✅ Pre-done | `/home/.../clones/odoo_18/odoo` cloned + indexed before this session; verified via DB query (repo id 34, clone_status=cloned). |
 | B2 `index-core` v9-v16 + v19 | ✅ Done | After PR #125 fix; per-version CoreSymbol 179-534, LintRule 21-63, CLIFlag 66-78. |
 | B3 odoo_18 full reindex (OBS-1) | 🟡 Running | Long-running setsid job; baseline 897 modules, target parity with v17 ~1368. |
-| B4 themes 18.0 → internal_profile_18 | ⏸ **Deferred (OBS-2)** | See below — upstream example/themes-repo.git has no `18.0` branch. |
-| B5 internal_profile_19 + 4 repos | ⏸ **Deferred (OBS-3)** | See below — none of the 4 saas/api/themes repos has a `19.0` branch upstream. |
-| B6 internal_profile_17 diagnosis | ✅ False positive | Earlier audit query error; profile has 49/49 modules indexed correctly. |
-| B7 v13 branding theme_* | ✅ False positive | Branding v13 has no theme_* modules by design. |
+| B4 internal profile 18.0 branch | ⏸ **Deferred (OBS-2)** | See below — upstream has no `18.0` branch for the required internal repo. |
+| B5 internal profile 19.0 + repos | ⏸ **Deferred (OBS-3)** | See below — none of the required internal repos has a `19.0` branch upstream. |
+| B6 internal profile 17.0 diagnosis | ✅ False positive | Earlier audit query error; profile has 49/49 modules indexed correctly. |
+| B7 v13 theme modules | ✅ False positive | v13 has no theme_* modules by design. |
 | B8 full reindex all profiles for CSS/SCSS | ⏸ Scheduled overnight | 6-9h wall clock; deferred to off-peak per operator. |
 | B9 v8 reindex (era1 fix verify) | 🟡 Running | Long-running setsid job; expect Neo4j Field count to converge with pgvector field embedding count for v8. |
 | B10 `seed_patterns --force` | ✅ Done | Required PR #124 hotfix to unblock; pattern embeddings for v9-v15 written. |
@@ -649,20 +649,15 @@ Two prod CLI bugs surfaced when Group B operations ran against the deployed code
 
 ### Out of scope — deferred due to upstream Viindoo branch gaps
 
-- [ ] **OBS-2 internal_profile_18 themes coverage gap**
-  - Source: B-phase ops 2026-05-18 — attempted to register `git@github.com:example/themes-repo.git@18.0` via direct DB insert + cloner module; git rejected with `fatal: Remote branch 18.0 not found in upstream origin`.
-  - Verified branch list (via OSM SSH key id=1): themes has `17.0` + `master` only.
-  - Acceptance: when Viindoo cuts `18.0` branch on `themes-repo.git`, re-run the B4 registration step in `internal-plan.md` Group B (insert repo row via `repo_store().add_repo(...)` then `python -m src.cloner --repo-id N` then `index-repo --profile internal_profile_18 --full`).
-  - Dependency: Viindoo upstream branch cut (external).
+- [ ] **OBS-2 internal profile 18.0 branch coverage gap**
+  - Source: B-phase ops 2026-05-18 — attempted to register an internal repo at `18.0` branch; git rejected with `fatal: Remote branch 18.0 not found in upstream origin`.
+  - Acceptance: when upstream cuts `18.0` branch on the required internal repo, re-run the B4 registration step (insert repo row via `repo_store().add_repo(...)` then `python -m src.cloner --repo-id N` then `index-repo --profile <internal_profile_18> --full`).
+  - Dependency: upstream branch cut (external).
 
-- [ ] **OBS-3 internal_profile_19 profile not yet creatable**
-  - Source: B-phase ops 2026-05-18 — listed branches for all 4 repos via OSM SSH key id=1:
-    - `acme_api`: `17.0`, `18.0`, `main` (no 19.0)
-    - `acme_infra`: `17.0`, `18.0`, `master` (no 19.0)
-    - `acme_infra_common`: `17.0`, `18.0`, `master` (no 19.0)
-    - `themes`: `17.0`, `master` (no 18.0 and no 19.0)
-  - Acceptance: when at least 1 repo (typically `acme_api`) has `19.0` branch cut, create the profile via `python -m src.manager add-profile internal_profile_19 --version 19.0 --description "Viindoo internal infrastructure for v19"`, then register repos by DB insert + cloner per the B5 runbook in `internal-plan.md`.
-  - Dependency: Viindoo upstream branch cuts (external).
+- [ ] **OBS-3 internal profile 19.0 — not yet creatable**
+  - Source: B-phase ops 2026-05-18 — all required internal repos only have `17.0`/`18.0`/`master` branches; none has `19.0`.
+  - Acceptance: when at least one required internal repo has `19.0` branch cut, create the profile via `python -m src.manager add-profile <internal_profile_19> --version 19.0`, then register repos by DB insert + cloner.
+  - Dependency: upstream branch cuts (external).
 
 ---
 
@@ -679,7 +674,7 @@ Two prod CLI bugs surfaced when Group B operations ran against the deployed code
 ### M10A — Tool Surface Expansion (low-risk, ship first)
 
 - [ ] **MCP tool surface for Stylesheet** — HIGH
-  - Source: `internal-plan.md` § "Out of scope" item 1 (WI-A7 absorption).
+  - Source: WI-A7 absorption (M9 Coverage Fill deferred items).
   - Scope: 2 new MCP tools — `resolve_stylesheet(module, odoo_version)` returns stylesheet chain + variable list; `find_style_override(selector_or_variable, odoo_version)` traces which module last re-declares a CSS custom property / overrides a selector.
   - Acceptance: tools registered in `src/mcp/server.py`; output follows ADR-0023 tree-grammar contract; routing matrix in [Viindoo/odoo-mcp-client](https://github.com/Viindoo/odoo-mcp-client/blob/master/docs/reference/mcp-tool-routing.md) lists both tools with TRIGGER phrases EN+VI; per-tool integration test against fixture profile.
   - Dependency: WI-A1 (`:Stylesheet` node landed via ADR-0025) + B8 reindex must populate stylesheet nodes for production profiles before tool ships.
@@ -716,13 +711,13 @@ Two prod CLI bugs surfaced when Group B operations ran against the deployed code
   - Dependency: WI-A2 (era1 field-gap fix) deployed in production.
 
 - [ ] **Pgvector observability — Prometheus `embedder_batch_duration_seconds` histogram** — MED
-  - Source: `internal-plan.md` § "Out of scope" item 3 (WI-A7 absorption); extends ADR-0010 §D7 follow-up.
+  - Source: WI-A7 absorption (M9 Coverage Fill deferred items); extends ADR-0010 §D7 follow-up.
   - Scope: histogram metric exposed at `/metrics` Prometheus endpoint, recording one observation per `embed()` batch call. Bucket boundaries: 0.1, 0.25, 0.5, 1.0, 1.5, 2.5, 5.0, 10.0, 30.0.
   - Acceptance: `GET /metrics` returns valid Prometheus text-format payload including `embedder_batch_duration_seconds_bucket` + `_count` + `_sum` series; metric tagged by `embedder_type` label; thread-safe under `--max-workers > 1`.
   - Cross-ref: ADR-0010 §D7 forward-refs back to this entry.
 
 - [ ] **Nonce-based CSP** — MED (PR #118 follow-up)
-  - Source: `internal-plan.md` § "Out of scope" item 10 (WI-A7 absorption); also tracked in MEMORY `m9_csp_permissions_policy_gap`.
+  - Source: WI-A7 absorption (M9 Coverage Fill deferred items); also tracked in MEMORY `m9_csp_permissions_policy_gap`.
   - Scope: replace `'unsafe-inline'` script/style sources with per-request nonces when Astro v5.1+ exposes nonce API. nginx generates nonce via `$request_id`; Astro middleware reads `X-CSP-Nonce` request header and emits `<script nonce="...">` for SSR-rendered scripts.
   - Acceptance: production CSP header includes `script-src 'nonce-<random>' 'self'` (no `'unsafe-inline'`); browser console clean of CSP violations; CI test verifies nonce uniqueness across 10 sequential requests.
   - Status: BLOCKED — awaits Astro v5.1+ nonce API exposure.
@@ -783,13 +778,13 @@ ADR impact: extends ADR-0023 tool-output completeness contract (no new ADR; sect
 **Outcome:** Parser pipeline replaces hard-coded era branches with a `(min_version, max_version, fn)` registry — adding v20 support becomes a single registry append. RelaxNG schema validation catches malformed XML in view inheritance chains. Pattern catalogue absorbs community contributions per ADR-0009.
 
 - [x] **Pattern catalogue expansion 35 → 100+** — MED (community track) *(2026-05-18 — Target met: 113 patterns in src/data/patterns.json via WI-A3 backfill commit d6a2406.)*
-  - Source: `internal-plan.md` § "Out of scope" item 2 (WI-A7 absorption); extends ADR-0009 community contribution policy.
+  - Source: WI-A7 absorption (M9 Coverage Fill deferred items); extends ADR-0009 community contribution policy.
   - Scope: per ADR-0009, accept community PRs to `patterns.json` with curator review. Target: ≥100 patterns total (current ~83 + 30 from WI-A3 backfill = 113 once batch lands; aim ≥100 retained after curation prune).
   - Acceptance: pattern count test `test_patterns_minimum_count.py::test_minimum_100_patterns` passes; new patterns include CSS/SCSS entries per ADR-0025 Future Work item 2 (Bootstrap variable overrides, OWL scoped CSS, mixin reuse).
   - Dependency: ADR-0009 community contribution flow already documented; needs marketing push to attract PRs.
 
 - [ ] **Static spec_data deepening — lint rules 50+/version** — MED
-  - Source: `internal-plan.md` § "Out of scope" item 4 (WI-A7 absorption).
+  - Source: WI-A7 absorption (M9 Coverage Fill deferred items).
   - Scope: extend `spec_data/lint_rules_X.0.json` from current baseline (per WI-A4: v8=20, v9=21, ..., v19=26) to ≥50 rules per major version. Prioritize rules with high frequency in real Odoo deprecation warnings; add ESLint SCSS rules (e.g. `scss/no-duplicate-dollar-variables`) per ADR-0025 Future Work item 4.
   - Acceptance: `test_lint_rules_minimum_count.py::test_minimum_50_per_version` passes for v10+ (v8/v9 may stay at curation baseline due to scarce source data); new rules categorized via existing `category` field (`deprecated_api`, `security`, `performance`, `style`).
   - Dependency: WI-A4 baseline must be deployed and production-validated (i.e. real usage logs reveal high-value gaps).

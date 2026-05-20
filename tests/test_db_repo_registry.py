@@ -269,7 +269,7 @@ def test_get_ancestor_repos_three_tier(migrated_pg):
 
     # Add one repo per tier
     repo_store().add_repo(leaf_id, "github.com/internal/repo", "99.0", "/tmp/internal")
-    repo_store().add_repo(mid_id, "github.com/acme_addons/repo", "99.0", "/tmp/tvtma")
+    repo_store().add_repo(mid_id, "github.com/acme_addons/repo", "99.0", "/tmp/acme")
     repo_store().add_repo(root_id, "github.com/odoo/odoo", "99.0", "/tmp/odoo")
 
     repos = repo_store().get_ancestor_repos("test_leaf_99")

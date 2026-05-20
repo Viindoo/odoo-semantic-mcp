@@ -1,43 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Version presets — bundled profile + repo definitions for one-shot setup.
 
-Source date: 2026-05-10. Update when Viindoo addon repo URLs/branches change.
+No presets bundled by default; admins configure profiles and repos via the
+web UI (/admin) or the JSON API. Populate PRESETS here if you want to ship
+pre-built presets with your deployment.
 """
 
-_SOURCE_DATE = "2026-05-10"
-
-PRESETS: dict[str, dict] = {
-    "viindoo-17.0": {
-        "profile_name": "viindoo17",
-        "odoo_version": "17.0",
-        "description": "Viindoo addons on Odoo CE 17.0",
-        "repos": [
-            {
-                "url": "https://github.com/odoo/odoo",
-                "branch": "17.0",
-                "local_path_hint": "~/git/odoo_17.0",
-            },
-            {
-                "url": "https://github.com/Viindoo/acme_addons",
-                "branch": "17.0",
-                "local_path_hint": "~/git/acme_addons17",
-            },
-        ],
-    },
-    "viindoo-18.0": {
-        "profile_name": "viindoo18",
-        "odoo_version": "18.0",
-        "description": "Viindoo addons on Odoo CE 18.0",
-        "repos": [
-            {
-                "url": "https://github.com/odoo/odoo",
-                "branch": "18.0",
-                "local_path_hint": "~/git/odoo_18.0",
-            },
-            # Viindoo 18.0 addons repo TBD by upstream.
-        ],
-    },
-}
+PRESETS: dict[str, dict] = {}
 
 
 def list_presets() -> list[str]:

@@ -606,16 +606,14 @@ def test_detect_edition_viindoo_prefix_to():
     assert _detect_module_edition({}, "to_quality", "/any/path") == "viindoo"
 
 
-def test_detect_edition_viindoo_path():
+def test_detect_edition_generic_path_no_prefix_returns_custom():
+    """A module with no viin_/to_ prefix in any generic repo path falls through to custom."""
     from src.indexer.parser_python import _detect_module_edition
-    assert (
-        _detect_module_edition({}, "anymod", "/home/x/acme_addons17/anymod")
-        == "viindoo"
-    )
-    assert (
-        _detect_module_edition(
-            {}, "anymod", "/home/x/acme_enterprise17/anymod",
-        ) == "viindoo"
+    # Generic module name + generic repo path: should NOT be detected as viindoo
+    # (path-based detection was removed — only name-prefix convention is used)
+    result = _detect_module_edition({}, "anymod", "/home/x/some_addons17/anymod")
+    assert result in ("custom", "community", "oca"), (
+        f"Expected non-viindoo result for generic module, got {result!r}"
     )
 
 

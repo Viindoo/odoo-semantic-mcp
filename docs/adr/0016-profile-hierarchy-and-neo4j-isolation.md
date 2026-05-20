@@ -3,21 +3,29 @@
 **Date:** 2026-05-14
 **Status:** Accepted — M8
 
+> **Addendum (2026-05-20):** The automatic master-data seed roster was removed
+> (security de-leak of private Viindoo deployment topology). Profiles are now
+> created by admins via the web UI or JSON API. The hierarchy mechanism
+> described in this ADR is unchanged.
+
 ## Context
 
-The master-data seed (PR #87) registered 26 profiles arranged in three tiers
-per Odoo version:
+A typical three-tier profile hierarchy per Odoo version looks like this:
 
 ```
-odoo_N            (Odoo CE base — owns the CE git repo)
-  └─ standard_profile_N   (CE + Viindoo public addons)
-       └─ internal_profile_N  (CE + public + internal repos)
+odoo_N              (Odoo CE base — owns the CE git repo)
+  └─ tier1_N        (CE + your public addons)
+       └─ tier2_N   (CE + public + internal repos)
 ```
 
-Each profile currently owns only its *delta* repos (enforced by
+The concrete profile names and repo URLs are chosen by each deploying
+organisation; the structural rules (delta repos, `UNIQUE (url, branch)`,
+parent FK, cycle-free validation) apply regardless of naming.
+
+Each profile owns only its *delta* repos (enforced by
 `UNIQUE (url, branch)` on the `repos` table). An admin indexing
-`internal_profile_17` must also separately index `odoo_17` and
-`standard_profile_17` to see the full picture.
+`tier2_17` must also separately index `odoo_17` and
+`tier1_17` to see the full picture.
 
 The MCP tools (`resolve_model`, `resolve_field`, etc.) filter nodes by
 `odoo_version` but have no concept of which repos belong to a specific
@@ -28,9 +36,9 @@ deployment profile. This causes two problems:
    `odoo_version = '17.0'` returns nodes from *all* 17.0 repos regardless
    of which profile they were indexed under.
 
-2. **No inheritance traversal**: A query scoped to `internal_profile_17`
+2. **No inheritance traversal**: A query scoped to `tier2_17`
    should automatically include nodes from `odoo_17` and
-   `standard_profile_17` (the ancestor chain), but there is no Postgres- or
+   `tier1_17` (the ancestor chain), but there is no Postgres- or
    Neo4j-level link expressing that ancestry.
 
 Two options were evaluated:
@@ -60,7 +68,7 @@ filters with `$profile_name IN m.profile`.
 
 *Accepted because:*
 - Cypher filter is one simple `WHERE` clause, consistent across all tools.
-- Querying `internal_profile_17` automatically returns nodes from ancestor
+- Querying `tier2_17` automatically returns nodes from ancestor
   profiles — no extra Postgres lookup at MCP query time.
 - The `profile` array is a first-class indexed Neo4j property, enabling
   future full-text or range queries on profiles without schema changes.
@@ -215,8 +223,8 @@ framework only exists from Odoo v14 onwards.
   no `profile` property. A query with `profile_name` filter returns nothing
   until nodes are reindexed. The post-merge ops runbook
   (`docs/deploy.md §Post-M8 reindex`) covers the sequence:
-  `index odoo_N` → `index standard_profile_N` → `index internal_profile_N`
-  for each active version.
+  `index odoo_N` → `index tier1_N` → `index tier2_N`
+  for each active version (substitute your actual profile names).
 - **Startup warning surfaces unreindexed nodes** (added in the follow-up
   fix commit): at ASGI startup, the lifespan hook runs a best-effort Cypher
   query counting nodes whose `profile` property is `NULL`. When the count is

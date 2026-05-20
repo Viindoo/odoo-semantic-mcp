@@ -16,14 +16,34 @@ import httpx
 import pytest
 
 from src.db.migrate import run_migrations
-from src.indexer.version_presets import PRESETS
 from src.web_ui.app import create_app
 
 pytestmark = pytest.mark.postgres
 
-# Use the first preset in PRESETS for testing
-_FIRST_PRESET_KEY = sorted(PRESETS.keys())[0]
-_FIRST_PRESET = PRESETS[_FIRST_PRESET_KEY]
+# PRESETS ships empty by default (bundled deployment presets were removed;
+# admins create profiles/repos via the web UI or JSON API). A synthetic preset
+# is injected per-test so the apply-preset endpoint logic stays under test
+# without shipping any deployment data.
+_FIRST_PRESET_KEY = "test-17.0"
+_FIRST_PRESET = {
+    "profile_name": "test17",
+    "odoo_version": "17.0",
+    "description": "Synthetic test preset",
+    "repos": [
+        {"url": "https://github.com/odoo/odoo", "branch": "17.0",
+         "local_path_hint": "~/git/odoo_17.0"},
+    ],
+}
+
+
+@pytest.fixture(autouse=True)
+def _inject_test_preset(monkeypatch):
+    """Inject a synthetic preset into the route's PRESETS so endpoint tests
+    exercise the apply-preset logic (production PRESETS is empty)."""
+    monkeypatch.setattr(
+        "src.web_ui.routes.operations.PRESETS",
+        {_FIRST_PRESET_KEY: _FIRST_PRESET},
+    )
 
 
 @pytest.fixture

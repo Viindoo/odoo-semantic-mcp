@@ -425,8 +425,8 @@ Output:
   ├─ Định nghĩa tại:   [odoo] addons/sale/models/sale_order.py
   ├─ Kế thừa từ:       account.move.mixin, mail.thread, mail.activity.mixin
   ├─ Mở rộng bởi:
-  │   ├─ [acme_addons]          viin_sale        → thêm: x_approval_state
-  │   └─ [acme_enterprise] to_sale_ext      → override: action_confirm()
+  │   ├─ [addons]               viin_sale        → thêm: x_approval_state
+  │   └─ [enterprise-addons]   to_sale_ext      → override: action_confirm()
   ├─ Tổng số field:    47 (12 từ extension)
   └─ Tổng số method:   23 (8 bị override)
 ```

@@ -1,11 +1,14 @@
 # tests/test_master_data_seed.py
-"""Tests for master data seeding (profiles + repos).
+"""Tests for master data seeding mechanism (profiles + repos).
+
+The default _PROFILE_DEFS and _REPO_DEFS_BY_PROFILE are empty. Most tests
+use monkeypatch to inject synthetic generic fixtures and verify the seeding
+MECHANISM (2-pass FK, idempotency, conflict warning, reset, cycle guard).
+
+Tests that verify the default-empty state do NOT use monkeypatch.
 
 Uses the session-scoped pg_conn + per-test clean_pg fixture to wipe schema
-tables (including yoyo state) before/after each test. ``run_migrations()``
-re-creates the schema (migration 0002 only contains an idempotent
-``ALTER TABLE``). Tests then call ``seed_profiles``/``seed_repos``/``seed_all``
-explicitly to drive the master-data seeding code path.
+tables before/after each test.
 """
 
 import pytest
@@ -14,6 +17,7 @@ from src.db.migrate import run_migrations
 from src.db.seed_master_data import (
     _PROFILE_DEFS,
     _REPO_DEFS_BY_PROFILE,
+    _SEED_NAME_PATTERNS,
     reset_seeded_data,
     seed_all,
     seed_profiles,
@@ -22,14 +26,28 @@ from src.db.seed_master_data import (
 
 pytestmark = pytest.mark.postgres
 
+# ---------------------------------------------------------------------------
+# Synthetic generic fixtures for mechanism tests
+# ---------------------------------------------------------------------------
 
-def _count_seeded_profiles(conn) -> int:
+_SYNTHETIC_PROFILES: list[tuple[str, str, str, str | None]] = [
+    ("t_root",  "17.0", "Root profile 17.0",  None),
+    ("t_child", "17.0", "Child profile 17.0", "t_root"),
+]
+
+_SYNTHETIC_REPOS: dict[str, list[tuple[str, str, str]]] = {
+    "t_root":  [("base", "git@github.com:example/base.git",  "17.0")],
+    "t_child": [("ext",  "git@github.com:example/ext.git",   "17.0")],
+}
+
+_SYNTHETIC_PATTERNS = ("t\\_root", "t\\_child")
+
+
+def _count_profiles(conn, pattern: str) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) FROM profiles "
-            r"WHERE name LIKE 'odoo\_%' ESCAPE '\' "
-            r"   OR name LIKE 'standard\_viindoo\_%' ESCAPE '\' "
-            r"   OR name LIKE 'viindoo\_internal\_%' ESCAPE '\'"
+            "SELECT COUNT(*) FROM profiles WHERE name LIKE %s ESCAPE '\\'",
+            (pattern,),
         )
         return cur.fetchone()[0]
 
@@ -45,169 +63,175 @@ def _count_repos_for_profile(conn, profile_name: str) -> int:
         return cur.fetchone()[0]
 
 
-_MIGRATION_0004_SEED_COUNT = 12  # all 12 root odoo_8-19 profiles pre-seeded by migration 0004
+# ---------------------------------------------------------------------------
+# Default empty state (no monkeypatch)
+# ---------------------------------------------------------------------------
+
+def test_profile_defs_empty_by_default():
+    """_PROFILE_DEFS must be empty in the open-core release."""
+    assert _PROFILE_DEFS == []
 
 
-def test_seed_profiles_inserts_26(clean_pg):
-    """seed_profiles() brings total to 26 master data profiles; idempotent.
+def test_repo_defs_by_profile_empty_by_default():
+    """_REPO_DEFS_BY_PROFILE must be empty in the open-core release."""
+    assert _REPO_DEFS_BY_PROFILE == {}
 
-    Migration 0004 pre-seeds _MIGRATION_0004_SEED_COUNT profiles before the
-    Python seeder runs, so inserted < 26 but total == 26.
-    """
+
+def test_seed_name_patterns_empty_by_default():
+    """_SEED_NAME_PATTERNS must be empty tuple so reset_seeded_data is a no-op."""
+    assert _SEED_NAME_PATTERNS == ()
+
+
+def test_seed_all_returns_zero_on_empty_defs(clean_pg):
+    """seed_all() with default empty defs returns all-zero counts."""
+    run_migrations(clean_pg)
+    summary = seed_all(clean_pg)
+    assert summary == {
+        "profiles_inserted": 0,
+        "profiles_skipped": 0,
+        "repos_inserted": 0,
+        "repos_skipped": 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Mechanism tests (synthetic fixtures via monkeypatch)
+# ---------------------------------------------------------------------------
+
+def test_seed_profiles_inserts_and_counts(clean_pg, monkeypatch):
+    """seed_profiles() with synthetic defs inserts expected count; idempotent on second call."""
+    import src.db.seed_master_data as smd
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", _SYNTHETIC_PROFILES)
+
     run_migrations(clean_pg)
     inserted, skipped = seed_profiles(clean_pg)
-    assert inserted == 26 - _MIGRATION_0004_SEED_COUNT
-    assert skipped == _MIGRATION_0004_SEED_COUNT
-    assert _count_seeded_profiles(clean_pg) == 26
-    # Re-run is a no-op
+    assert inserted == 2
+    assert skipped == 0
+
+    # Re-run is idempotent
     inserted2, skipped2 = seed_profiles(clean_pg)
     assert inserted2 == 0
-    assert skipped2 == 26
-    # Sanity: _PROFILE_DEFS matches
-    assert len(_PROFILE_DEFS) == 26
+    assert skipped2 == 2
 
 
-def test_seed_repos_inserts_48_total(clean_pg):
-    """seed_repos() inserts the expected 48 repos across all 26 profiles.
+def test_seed_repos_inserts_correct_count(clean_pg, monkeypatch):
+    """seed_repos() with synthetic defs inserts expected repo count."""
+    import src.db.seed_master_data as smd
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", _SYNTHETIC_PROFILES)
+    monkeypatch.setattr(smd, "_REPO_DEFS_BY_PROFILE", _SYNTHETIC_REPOS)
 
-    Delta-only model: each profile owns only repos NOT present in a lower tier.
-    Odoo CE owns Viindoo/odoo; Standard Viindoo owns addons only; Viindoo
-    Internal owns internal-only repos. PostgreSQL ``UNIQUE (url, branch)`` on
-    ``repos`` enforces this.
-    """
     run_migrations(clean_pg)
-    seed_profiles(clean_pg)  # FK requires profile rows
+    seed_profiles(clean_pg)
     inserted, skipped = seed_repos(clean_pg)
-    assert inserted == 48
+    assert inserted == 2  # 1 for t_root, 1 for t_child
     assert skipped == 0
-    # Sanity against the data definition
-    assert sum(len(v) for v in _REPO_DEFS_BY_PROFILE.values()) == 48
+    assert _count_repos_for_profile(clean_pg, "t_root") == 1
+    assert _count_repos_for_profile(clean_pg, "t_child") == 1
 
 
-def test_seed_all_idempotent(clean_pg):
-    """Calling seed_all() twice does not duplicate rows.
+def test_seed_all_idempotent(clean_pg, monkeypatch):
+    """Calling seed_all() twice does not duplicate rows."""
+    import src.db.seed_master_data as smd
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", _SYNTHETIC_PROFILES)
+    monkeypatch.setattr(smd, "_REPO_DEFS_BY_PROFILE", _SYNTHETIC_REPOS)
 
-    Migration 0004 pre-seeds _MIGRATION_0004_SEED_COUNT profiles before
-    seed_all() runs, so first call inserts fewer profiles but total is still 26.
-    """
     run_migrations(clean_pg)
     first = seed_all(clean_pg)
     second = seed_all(clean_pg)
-    # First call: migration already seeded 12 root profiles; Python seeder inserts remaining 14.
-    assert first["profiles_inserted"] == 26 - _MIGRATION_0004_SEED_COUNT
-    assert first["profiles_skipped"] == _MIGRATION_0004_SEED_COUNT
-    assert first["repos_inserted"] == 48
-    assert first["repos_skipped"] == 0
-    # Second call: everything already present → all skipped
+
+    assert first["profiles_inserted"] == 2
+    assert first["repos_inserted"] == 2
     assert second["profiles_inserted"] == 0
-    assert second["profiles_skipped"] == 26
+    assert second["profiles_skipped"] == 2
     assert second["repos_inserted"] == 0
-    assert second["repos_skipped"] == 48
-    # No duplicates: row counts unchanged
-    assert _count_seeded_profiles(clean_pg) == 26
+    assert second["repos_skipped"] == 2
+
+    # No duplicates
     with clean_pg.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM repos")
-        assert cur.fetchone()[0] == 48
+        assert cur.fetchone()[0] == 2
 
 
-def test_seeded_profile_repo_counts_match_matrix(clean_pg):
-    """Each profile tier has the right delta-only repo count per the design matrix."""
+def test_seed_sets_parent_fk(clean_pg, monkeypatch):
+    """After seed_profiles(), t_child.parent_profile_id → t_root (2-pass FK)."""
+    import src.db.seed_master_data as smd
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", _SYNTHETIC_PROFILES)
+
     run_migrations(clean_pg)
-    seed_all(clean_pg)
-    # Odoo CE: 1 repo (Viindoo/odoo) per version
-    for v in range(8, 20):
-        assert _count_repos_for_profile(clean_pg, f"odoo_{v}") == 1, f"odoo_{v}"
-    # Standard Viindoo (delta — addons only; Odoo CE base lives under odoo_N):
-    #   v8-v9   → 1 (acme_addons)
-    #   v10-v12 → 2 (+acme_enterprise)
-    #   v13-v19 → 3 (+branding)
-    for v in (8, 9):
-        assert _count_repos_for_profile(clean_pg, f"standard_profile_{v}") == 1
-    for v in (10, 11, 12):
-        assert _count_repos_for_profile(clean_pg, f"standard_profile_{v}") == 2
-    for v in (13, 14, 15, 16, 17, 18, 19):
-        assert _count_repos_for_profile(clean_pg, f"standard_profile_{v}") == 3
-    # Viindoo Internal (delta — internal repos only):
-    #   v17 → 4 (saas-infra, saas-infra-common, themes, acme_api)
-    #   v18 → 3 (no themes — max branch is 17.0)
-    assert _count_repos_for_profile(clean_pg, "internal_profile_17") == 4
-    assert _count_repos_for_profile(clean_pg, "internal_profile_18") == 3
+    seed_profiles(clean_pg)
 
-
-def test_internal_profile_18_excludes_themes(clean_pg):
-    """themes max branch is 17.0 → internal_profile_18 must not include themes."""
-    run_migrations(clean_pg)
-    seed_all(clean_pg)
     with clean_pg.cursor() as cur:
         cur.execute(
-            "SELECT r.url FROM repos r "
-            "JOIN profiles p ON p.id = r.profile_id "
-            "WHERE p.name = %s",
-            ("internal_profile_18",),
+            "SELECT p_child.parent_profile_id, p_parent.name "
+            "FROM profiles p_child "
+            "JOIN profiles p_parent ON p_parent.id = p_child.parent_profile_id "
+            "WHERE p_child.name = %s",
+            ("t_child",),
         )
-        urls = [row[0] for row in cur.fetchall()]
-    assert all("acme_themes" not in url for url in urls), urls
-    # v17 should include themes (positive control)
+        row = cur.fetchone()
+
+    assert row is not None, "t_child must have a parent_profile_id set"
+    assert row[1] == "t_root", f"expected parent t_root, got {row[1]}"
+
+
+def test_seed_parent_fk_idempotent(clean_pg, monkeypatch):
+    """Second seed_profiles() call must not change parent_profile_id."""
+    import src.db.seed_master_data as smd
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", _SYNTHETIC_PROFILES)
+
+    run_migrations(clean_pg)
+    seed_profiles(clean_pg)
+
     with clean_pg.cursor() as cur:
         cur.execute(
-            "SELECT r.url FROM repos r "
-            "JOIN profiles p ON p.id = r.profile_id "
-            "WHERE p.name = %s",
-            ("internal_profile_17",),
+            "SELECT parent_profile_id FROM profiles WHERE name = %s", ("t_child",)
         )
-        urls17 = [row[0] for row in cur.fetchall()]
-    assert any("acme_themes" in url for url in urls17), urls17
+        parent_id_before = cur.fetchone()[0]
 
+    seed_profiles(clean_pg)
 
-def test_seeded_repos_clone_status_manual(clean_pg):
-    """All seeded repos must have clone_status='manual'."""
-    run_migrations(clean_pg)
-    seed_all(clean_pg)
     with clean_pg.cursor() as cur:
         cur.execute(
-            "SELECT DISTINCT clone_status FROM repos r "
-            "JOIN profiles p ON p.id = r.profile_id "
-            r"WHERE p.name LIKE 'odoo\_%' ESCAPE '\' "
-            r"   OR p.name LIKE 'standard\_viindoo\_%' ESCAPE '\' "
-            r"   OR p.name LIKE 'viindoo\_internal\_%' ESCAPE '\'"
+            "SELECT parent_profile_id FROM profiles WHERE name = %s", ("t_child",)
         )
-        statuses = {row[0] for row in cur.fetchall()}
-    assert statuses == {"manual"}
+        parent_id_after = cur.fetchone()[0]
+
+    assert parent_id_before == parent_id_after, (
+        "parent_profile_id must not change on second seed"
+    )
 
 
-def test_admin_data_wins_on_name_conflict(clean_pg):
-    """Manual profile created before seed is NOT overwritten — admin data wins.
+def test_admin_data_wins_on_name_conflict(clean_pg, monkeypatch):
+    """Manual profile with same name as a seeded profile is NOT overwritten."""
+    import src.db.seed_master_data as smd
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", _SYNTHETIC_PROFILES)
 
-    Uses a profile name NOT seeded by migration 0004 (which owns odoo_8-19),
-    so we can insert the row manually before the Python seeder runs.
-    ``standard_profile_17`` is owned only by the Python seeder's Pass 1 —
-    not by any SQL migration — making it suitable for this test.
-    """
     run_migrations(clean_pg)
-    # Create a manual profile of the same name BEFORE the Python seed runs.
-    # standard_profile_17 is not pre-seeded by migration 0004 (SQL rescue path
-    # only covers root odoo_N profiles).
     with clean_pg.cursor() as cur:
         cur.execute(
             "INSERT INTO profiles (name, odoo_version, description) VALUES (%s, %s, %s)",
-            ("standard_profile_17", "17.0", "MANUAL — do not overwrite"),
+            ("t_root", "17.0", "MANUAL — do not overwrite"),
         )
-    # Run the Python seed — standard_profile_17 already exists → INSERT skipped →
-    # manual row preserved (ON CONFLICT DO NOTHING).
+
     seed_profiles(clean_pg)
+
     with clean_pg.cursor() as cur:
         cur.execute(
-            "SELECT description FROM profiles WHERE name = %s",
-            ("standard_profile_17",),
+            "SELECT description FROM profiles WHERE name = %s", ("t_root",)
         )
         assert cur.fetchone()[0] == "MANUAL — do not overwrite"
 
 
-def test_seed_repos_warns_on_cross_profile_conflict(clean_pg, capsys):
-    """Cross-profile (url, branch) skip emits a clarifying warning."""
+def test_seed_repos_warns_on_cross_profile_conflict(clean_pg, monkeypatch, capsys):
+    """Cross-profile (url, branch) skip emits a clarifying warning on stderr."""
+    import src.db.seed_master_data as smd
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", _SYNTHETIC_PROFILES)
+    monkeypatch.setattr(smd, "_REPO_DEFS_BY_PROFILE", _SYNTHETIC_REPOS)
+
     run_migrations(clean_pg)
-    # Pre-register Viindoo/odoo @ 17.0 under a non-seed profile name
-    seed_profiles(clean_pg)  # ensures odoo_17 row exists
+    seed_profiles(clean_pg)
+
+    # Pre-register the same url+branch under a non-seeded profile
     with clean_pg.cursor() as cur:
         cur.execute(
             "INSERT INTO profiles (name, odoo_version, description) "
@@ -218,51 +242,65 @@ def test_seed_repos_warns_on_cross_profile_conflict(clean_pg, capsys):
         cur.execute(
             "INSERT INTO repos (profile_id, url, branch, local_path, clone_status) "
             "VALUES (%s, %s, %s, %s, %s)",
-            (legacy_id, "git@github.com:Viindoo/odoo.git", "17.0", "/tmp/legacy", "manual"),
+            (legacy_id, "git@github.com:example/base.git", "17.0", "/tmp/legacy", "manual"),
         )
-    # Now seed — odoo_17 wants Viindoo/odoo@17.0 too; should skip + warn
+
+    # Now seed — t_root wants the same url@branch; should skip + warn
     seed_repos(clean_pg)
     captured = capsys.readouterr()
     assert "legacy_consumer" in captured.err
-    assert "odoo_17" in captured.err
+    assert "t_root" in captured.err
 
 
-def test_reset_seeded_data_deletes_only_seeded_profiles(clean_pg):
-    """reset_seeded_data deletes prefix-matching profiles + cascades repos.
+def test_reset_seeded_data_deletes_matching_profiles(clean_pg, monkeypatch):
+    """reset_seeded_data deletes prefix-matching profiles + cascades repos."""
+    import src.db.seed_master_data as smd
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", _SYNTHETIC_PROFILES)
+    monkeypatch.setattr(smd, "_REPO_DEFS_BY_PROFILE", _SYNTHETIC_REPOS)
+    monkeypatch.setattr(smd, "_SEED_NAME_PATTERNS", _SYNTHETIC_PATTERNS)
 
-    Profiles not matching the seed prefixes (e.g. legacy 'viindoo17' without
-    underscore from the apply-preset CLI) MUST be preserved.
-    """
     run_migrations(clean_pg)
     seed_all(clean_pg)
-    # Manually create a non-seed profile to verify it survives reset
+
+    # Create a non-seed profile to verify it survives reset
     with clean_pg.cursor() as cur:
         cur.execute(
             "INSERT INTO profiles (name, odoo_version, description) VALUES (%s, %s, %s)",
-            ("viindoo17", "17.0", "Legacy preset profile"),
+            ("unrelated_profile", "17.0", "Should survive"),
         )
-    assert _count_seeded_profiles(clean_pg) == 26
+
     deleted = reset_seeded_data(clean_pg)
-    assert deleted == 26
-    assert _count_seeded_profiles(clean_pg) == 0
-    # All seeded repos cascaded away
-    with clean_pg.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM repos")
-        assert cur.fetchone()[0] == 0
-    # Legacy non-seed profile survives
+    assert deleted == 2  # t_root + t_child
+
+    # Seeded profiles gone
+    assert _count_profiles(clean_pg, "t\\_%") == 0
+
+    # Seeded repos cascaded away
     with clean_pg.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) FROM profiles WHERE name = %s", ("viindoo17",)
+            "SELECT COUNT(*) FROM repos r "
+            "JOIN profiles p ON p.id = r.profile_id "
+            "WHERE p.name IN ('t_root', 't_child')"
+        )
+        assert cur.fetchone()[0] == 0
+
+    # Non-seed profile survives
+    with clean_pg.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM profiles WHERE name = %s", ("unrelated_profile",)
         )
         assert cur.fetchone()[0] == 1
 
 
-def test_cli_rejects_reset_and_profiles_only_combination(clean_pg, capsys):
-    """`seed-master-data --reset --profiles-only` must error out (Opus MED fix).
+def test_reset_seeded_data_noop_when_patterns_empty(clean_pg):
+    """reset_seeded_data() with empty _SEED_NAME_PATTERNS deletes nothing."""
+    run_migrations(clean_pg)
+    deleted = reset_seeded_data(clean_pg)
+    assert deleted == 0
 
-    Combining the flags would CASCADE-delete child repos then skip re-seeding
-    them — silent foot-gun. The CLI rejects the combination with exit 1.
-    """
+
+def test_cli_rejects_reset_and_profiles_only_combination(clean_pg, capsys):
+    """`seed-master-data --reset --profiles-only` must error out with exit 1."""
     from argparse import Namespace
 
     from src.manager.__main__ import _cmd_seed_master_data
@@ -274,119 +312,53 @@ def test_cli_rejects_reset_and_profiles_only_combination(clean_pg, capsys):
     assert rc == 1
     captured = capsys.readouterr()
     assert "cannot be combined" in captured.err
-    # DB state unchanged (no DELETE, no INSERT by the CLI command itself).
-    # Migration 0004 already seeded 12 profiles; the rejected CLI command must not add more.
-    assert _count_seeded_profiles(clean_pg) == _MIGRATION_0004_SEED_COUNT
 
 
-@pytest.mark.parametrize(
-    "profile_name,expected_url_substring",
-    [
-        ("odoo_17",              "Viindoo/odoo.git"),
-        ("standard_profile_13",  "example/branding-repo.git"),
-        ("internal_profile_17",  "Viindoo/acme_infra.git"),
-    ],
-)
-def test_seed_repos_uses_viindoo_ssh_url(clean_pg, profile_name, expected_url_substring):
-    """All seeded repos must use git@github.com:Viindoo/* SSH URLs."""
+def test_seed_repos_clone_status_manual(clean_pg, monkeypatch):
+    """All seeded repos must have clone_status='manual'."""
+    import src.db.seed_master_data as smd
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", _SYNTHETIC_PROFILES)
+    monkeypatch.setattr(smd, "_REPO_DEFS_BY_PROFILE", _SYNTHETIC_REPOS)
+
     run_migrations(clean_pg)
     seed_all(clean_pg)
+
     with clean_pg.cursor() as cur:
         cur.execute(
-            "SELECT r.url FROM repos r JOIN profiles p ON p.id = r.profile_id "
-            "WHERE p.name = %s",
-            (profile_name,),
+            "SELECT DISTINCT clone_status FROM repos r "
+            "JOIN profiles p ON p.id = r.profile_id "
+            "WHERE p.name IN ('t_root', 't_child')"
         )
-        urls = [row[0] for row in cur.fetchall()]
-    assert all(url.startswith("git@github.com:Viindoo/") for url in urls), urls
-    assert any(expected_url_substring in url for url in urls), (
-        f"{profile_name} missing {expected_url_substring} in {urls}"
-    )
+        statuses = {row[0] for row in cur.fetchall()}
+    assert statuses == {"manual"}
 
 
-# ---------------------------------------------------------------------------
-# M8 — Parent FK seed tests
-# ---------------------------------------------------------------------------
+def test_seed_repos_skips_missing_profile(clean_pg, monkeypatch):
+    """seed_repos() silently skips profiles that don't exist in the DB."""
+    import src.db.seed_master_data as smd
+    # Only register repos for a profile that won't be seeded
+    monkeypatch.setattr(smd, "_PROFILE_DEFS", [])  # no profiles seeded
+    monkeypatch.setattr(smd, "_REPO_DEFS_BY_PROFILE", _SYNTHETIC_REPOS)
 
-def test_seed_sets_parent_fk(clean_pg):
-    """After seed_profiles(), internal_profile_17.parent_profile_id → standard_profile_17."""
     run_migrations(clean_pg)
-    seed_profiles(clean_pg)
-
-    with clean_pg.cursor() as cur:
-        cur.execute(
-            "SELECT p_child.parent_profile_id, p_parent.name "
-            "FROM profiles p_child "
-            "JOIN profiles p_parent ON p_parent.id = p_child.parent_profile_id "
-            "WHERE p_child.name = %s",
-            ("internal_profile_17",),
-        )
-        row = cur.fetchone()
-
-    assert row is not None, "internal_profile_17 must have a parent_profile_id set"
-    assert row[1] == "standard_profile_17", (
-        f"expected parent standard_profile_17, got {row[1]}"
-    )
-
-
-def test_seed_parent_chain_standard_to_odoo(clean_pg):
-    """standard_profile_17.parent_profile_id → odoo_17 after seed."""
-    run_migrations(clean_pg)
-    seed_profiles(clean_pg)
-
-    with clean_pg.cursor() as cur:
-        cur.execute(
-            "SELECT p_parent.name "
-            "FROM profiles p_child "
-            "JOIN profiles p_parent ON p_parent.id = p_child.parent_profile_id "
-            "WHERE p_child.name = %s",
-            ("standard_profile_17",),
-        )
-        row = cur.fetchone()
-
-    assert row is not None
-    assert row[0] == "odoo_17"
-
-
-def test_seed_idempotent_when_parent_already_set(clean_pg):
-    """Second seed_profiles() call is a no-op — does not change parent_profile_id."""
-    run_migrations(clean_pg)
-    seed_profiles(clean_pg)
-
-    # Record parent FK before second seed
-    with clean_pg.cursor() as cur:
-        cur.execute(
-            "SELECT parent_profile_id FROM profiles WHERE name = %s",
-            ("internal_profile_17",),
-        )
-        parent_id_before = cur.fetchone()[0]
-
-    # Second seed
-    seed_profiles(clean_pg)
-
-    with clean_pg.cursor() as cur:
-        cur.execute(
-            "SELECT parent_profile_id FROM profiles WHERE name = %s",
-            ("internal_profile_17",),
-        )
-        parent_id_after = cur.fetchone()[0]
-
-    assert parent_id_before == parent_id_after, (
-        "parent_profile_id must not change on second seed"
-    )
+    inserted, skipped = seed_repos(clean_pg)
+    # t_root and t_child profiles don't exist → both skipped silently
+    assert inserted == 0
+    assert skipped == 0
 
 
 # ---------------------------------------------------------------------------
-# Fix-I: import-time CI guards on _PROFILE_DEFS
-# Pure unit tests — no DB needed, no pytestmark = pytest.mark.postgres.
+# Pure unit tests — no DB, no pytestmark override
+# These tests run without the postgres fixture.
 # ---------------------------------------------------------------------------
 
+# Override the module-level mark for these specific tests
+@pytest.mark.filterwarnings("ignore")
 def test_profile_defs_no_cycles():
     """_PROFILE_DEFS parent chain must be cycle-free.
 
-    For each entry, follow parent_name upward; if any name is revisited,
-    the definition has a cycle.  Uses a chain length limit of
-    len(_PROFILE_DEFS) + 1 to detect infinite loops.
+    With the default empty list this vacuously passes. The test is preserved
+    as a guard for when _PROFILE_DEFS is populated.
     """
     parent_map = {name: parent for name, _v, _d, parent in _PROFILE_DEFS}
     max_depth = len(_PROFILE_DEFS) + 1
@@ -405,12 +377,30 @@ def test_profile_defs_no_cycles():
             depth += 1
 
 
+def test_profile_defs_no_cycles_with_synthetic():
+    """_PROFILE_DEFS cycle-free guard works on synthetic fixtures."""
+    profile_defs = _SYNTHETIC_PROFILES
+    parent_map = {name: parent for name, _v, _d, parent in profile_defs}
+    max_depth = len(profile_defs) + 1
+
+    for name, _v, _d, _parent in profile_defs:
+        visited = set()
+        current = name
+        depth = 0
+        while current is not None and depth <= max_depth:
+            assert current not in visited, (
+                f"Cycle detected starting from {name!r}: visited {visited!r}, hit {current!r}"
+            )
+            visited.add(current)
+            current = parent_map.get(current)
+            depth += 1
+
+
 def test_profile_defs_version_match():
     """Each _PROFILE_DEFS entry with a parent must share the parent's odoo_version.
 
-    This mirrors the runtime check in _validate_parent so that a careless
-    edit to _PROFILE_DEFS fails fast in CI rather than silently creating
-    cross-version parent links at deploy time.
+    Vacuously passes on the default empty list. Preserved as a CI guard for
+    when _PROFILE_DEFS is populated.
     """
     version_map = {name: version for name, version, _d, _parent in _PROFILE_DEFS}
 
@@ -425,4 +415,18 @@ def test_profile_defs_version_match():
         assert version == parent_version, (
             f"Version mismatch in _PROFILE_DEFS: {name!r} has version {version!r} "
             f"but parent {parent_name!r} has version {parent_version!r}"
+        )
+
+
+def test_profile_defs_version_match_synthetic():
+    """Version-match guard detects cross-version parent in synthetic defs."""
+    # This should pass (both t_root and t_child are 17.0)
+    version_map = {name: ver for name, ver, _d, _parent in _SYNTHETIC_PROFILES}
+    for name, version, _desc, parent_name in _SYNTHETIC_PROFILES:
+        if parent_name is None:
+            continue
+        assert parent_name in version_map
+        assert version == version_map[parent_name], (
+            f"{name!r} version {version!r} != parent {parent_name!r} version "
+            f"{version_map[parent_name]!r}"
         )

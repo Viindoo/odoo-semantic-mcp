@@ -3,7 +3,7 @@
 
 Source: 2026-05-08 survey 16 modules verified absent từ
 ~/git/odoo{17,18,19}/odoo/addons/. Mapping → Viindoo equivalent
-từ acme_addons17 + acme_enterprise17 surveyed addons.
+surveyed from Viindoo addon repositories.
 
 DO NOT DEPEND on these modules in Viindoo Community stack — vi phạm
 GPL/Enterprise license boundary (per CLAUDE.md §2 stack rule).

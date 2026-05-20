@@ -27,8 +27,16 @@ pytestmark = [pytest.mark.browser, pytest.mark.postgres]
 REPOS_URL = "/admin/repos"
 OPS_URL = "/admin/operations"
 
-_FIRST_PRESET_KEY = sorted(PRESETS.keys())[0]
-_FIRST_PRESET = PRESETS[_FIRST_PRESET_KEY]
+# PRESETS ships empty by default (bundled deployment presets were removed;
+# admins create profiles/repos via the web UI). Preset-dependent browser tests
+# skip when no preset is available — the live Astro server reads the real
+# (empty) PRESETS, so a synthetic preset cannot be injected into its dropdown.
+_PRESET_KEYS = sorted(PRESETS.keys())
+_FIRST_PRESET_KEY = _PRESET_KEYS[0] if _PRESET_KEYS else None
+_FIRST_PRESET = PRESETS[_FIRST_PRESET_KEY] if _FIRST_PRESET_KEY else None
+_skip_no_presets = pytest.mark.skipif(
+    not PRESETS, reason="no presets bundled (admins create profiles via the web UI)"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +499,7 @@ class TestApplyPreset:
         expect(page.get_by_test_id("ops-preset-dry-run-input")).to_be_visible(timeout=5000)
         expect(page.get_by_test_id("apply-preset-button")).to_be_visible(timeout=5000)
 
+    @_skip_no_presets
     def test_apply_preset_dry_run_shows_result(
         self, astro_server, clean_browser, page
     ):
@@ -511,6 +520,7 @@ class TestApplyPreset:
 
         expect(page.get_by_test_id("preset-result")).to_be_visible(timeout=8000)
 
+    @_skip_no_presets
     def test_apply_preset_real_apply_shows_flash(
         self, astro_server, clean_browser, page
     ):
@@ -547,6 +557,7 @@ class TestIndexOptionsExtra:
 
         expect(page.get_by_test_id("ops-seed-no-embed-input")).to_be_visible(timeout=5000)
 
+    @_skip_no_presets
     def test_apply_preset_first_key_in_select(
         self, astro_server, clean_browser, page
     ):

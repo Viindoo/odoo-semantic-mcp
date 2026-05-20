@@ -137,7 +137,7 @@ CSS has no `@mixin` concept. The `mixin_count` property is always 0 for `:Styles
 
 ## Future Work
 
-The following items are deferred and tracked in `TASKS.md` (WI-A7 absorption from plan `internal-plan.md`):
+The following items are deferred and tracked in `TASKS.md` (WI-A7 absorption, M9 Coverage Fill):
 
 1. **MCP tool surface for Stylesheet** (`resolve_stylesheet`, `find_style_override`) — **M10A** (tracked in `TASKS.md` Milestone 10 § M10A "Tool Surface Expansion"). After B8 re-index populates `:Stylesheet` nodes, expose `resolve_stylesheet(module, odoo_version)` returning the stylesheet chain and variable list, and `find_style_override(selector_or_variable, odoo_version)` tracing which module last re-declares a CSS custom property / overrides a selector. Both tools must follow ADR-0023 tree-grammar contract (§1 header, §1.3 sublist indent, §4 Next-step hint) and update the routing matrix in [Viindoo/odoo-mcp-client](https://github.com/Viindoo/odoo-mcp-client/blob/master/docs/reference/mcp-tool-routing.md).
    

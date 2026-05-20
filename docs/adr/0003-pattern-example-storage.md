@@ -49,7 +49,7 @@ ADR-0001 cấm ALTER PostgreSQL until M6 → không thể `CREATE TABLE pattern_
    - `Module.edition`: `'community' | 'enterprise' | 'viindoo' | 'oca' | 'custom'` — SET trong MERGE statement
    - `Module.viindoo_equivalent_qname`: nullable string, hardcoded từ `EE_CONFUSION` dict cho 16 EE-only module
    - Detection logic (parser_python.py mới):
-     - Folder pattern `viin_*/to_*` hoặc path chứa `acme_addons/acme_enterprise` → `'viindoo'`
+     - Folder pattern `viin_*/to_*` hoặc path chứa `<your-addon-repo>` → `'viindoo'`
      - Manifest `license = 'OCA-...'` → `'oca'`
      - Manifest `license ∈ {'LGPL-3', 'GPL-3'}` + path chứa `/odoo/addons/` → `'community'`
      - Fallback → `'custom'`

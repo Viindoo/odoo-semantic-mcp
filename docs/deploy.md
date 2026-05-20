@@ -398,26 +398,15 @@ indexer subprocess; populated bởi `index-repo --job-id N` + Web UI status badg
 > MCP server startup (`src/mcp/server.py _get_driver()`) tương tự verify Neo4j ≥ 5.x
 > qua `CALL dbms.components()`.
 
-### 3.3.5 Master data auto-seed
+### 3.3.5 Profiles and repos setup
 
-`python -m src.db.migrate` tự động seed 26 master data profiles (Odoo v8-v19,
-Standard Viindoo v8-v19, Viindoo Internal v17/v18) + 48 repos rows (mô hình
-**delta-only** — xem [`docs/deploy/master-data-upgrade.md`](deploy/master-data-upgrade.md)
-phần *Mô Hình Profile Delta*) sau khi schema migrations apply xong. Repos
-`clone_status` mặc định = `manual` — admin bấm Clone trong Web UI khi sẵn sàng
-(tiết kiệm disk + bandwidth).
+`python -m src.db.migrate` chỉ áp dụng schema migrations — không seed profiles
+hay repos tự động. Admin tạo profiles + repos qua web UI hoặc JSON API.
 
-Re-seed thủ công (vd sau khi code update thêm version mới):
-
-```bash
-sudo -u odoo-semantic ~/.venv/odoo-semantic-mcp/bin/python -m src.manager seed-master-data
-```
-
-Idempotent — chạy nhiều lần an toàn. Existing profiles trùng tên (kể cả tạo
-thủ công trước đây) **không** bị overwrite. CLI cũng hỗ trợ `--profiles-only`
-và `--reset` (destructive).
-
-Đối với deployment hiện hữu, xem [`docs/deploy/master-data-upgrade.md`](deploy/master-data-upgrade.md) cho runbook nâng cấp đầy đủ (backup, verify, rollback).
+Xem [`docs/deploy/master-data-upgrade.md`](deploy/master-data-upgrade.md) cho
+hướng dẫn tạo profiles, thêm repos, và setup profile hierarchy (delta model per
+ADR-0016). Đối với deployment hiện hữu upgrading từ version có seed roster cũ,
+xem phần *Upgrading an Existing Deployment* trong cùng doc đó.
 
 ### 3.4 Đăng ký repos + index lần đầu
 
