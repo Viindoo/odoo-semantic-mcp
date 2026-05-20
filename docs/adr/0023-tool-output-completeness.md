@@ -65,7 +65,7 @@ sale.order (Odoo 17.0)
 ├─ Extended by:
 │   ├─ [odoo_17.0] sale_stock
 │   ├─ [odoo_17.0] sale_management
-│   └─ [erponline_17.0] viin_sale
+│   └─ [acme_enterprise_17.0] viin_sale
 ├─ Fields:         72
 └─ Methods:        58
 ```
@@ -81,7 +81,7 @@ sale.order.amount_total (Odoo 17.0)
 ├─ Related:  —
 └─ Declared in:
     ├─ [odoo_17.0] sale
-    └─ [erponline_17.0] viin_sale
+    └─ [acme_enterprise_17.0] viin_sale
 ```
 
 The `Declared in:` branch uses `└─` (last child), so its sublist indents with 4 spaces, not `│   `.

@@ -345,12 +345,12 @@ def _cmd_list_webui_users(args, conn) -> int:
 
 
 def _cmd_seed_master_data(args, conn) -> int:
-    """Seed (or reset) 26 master data profiles + their repos.
+    """Seed (or reset) master data profiles + their repos.
 
-    Idempotent — INSERT ... ON CONFLICT DO NOTHING. Existing profiles trùng
-    name (manual hoặc seed cũ) không bị overwrite. With ``--reset``, DELETE
-    all profiles matching seed-name prefixes first (CASCADE removes child
-    repos); requires interactive ``YES`` confirm.
+    Idempotent — INSERT ... ON CONFLICT DO NOTHING. Existing profiles with the
+    same name (manual or prior seed) are not overwritten. With ``--reset``,
+    DELETE all profiles matching seeded-name prefixes first (CASCADE removes
+    child repos); requires interactive ``YES`` confirm.
 
     ``--reset`` and ``--profiles-only`` are mutually exclusive: combining them
     would CASCADE-delete child repos but then skip re-seeding them, leaving
@@ -370,10 +370,9 @@ def _cmd_seed_master_data(args, conn) -> int:
 
     if args.reset:
         print(
-            "⚠ --reset will DELETE every profile whose name starts with "
-            "'odoo_', 'standard_viindoo_', or 'viindoo_internal_'.\n"
+            "⚠ --reset will DELETE every profile whose name matches a seeded prefix pattern.\n"
             "  CASCADE will remove their child repos.\n"
-            "  Manually-created profiles matching these prefixes WILL also be deleted.",
+            "  Manually-created profiles matching those prefixes WILL also be deleted.",
             file=sys.stderr,
         )
         try:
@@ -785,18 +784,18 @@ def main(argv: list[str] | None = None) -> int:
 
             Examples:
               # Auto-derive local paths from ~/git (must exist):
-              python -m src.manager apply-preset viindoo-17.0
+              python -m src.manager apply-preset <preset-name>
 
               # Override base directory:
-              python -m src.manager apply-preset viindoo-17.0 --repo-base-dir /data/repos
+              python -m src.manager apply-preset <preset-name> --repo-base-dir /data/repos
 
               # Explicit per-repo path mapping:
-              python -m src.manager apply-preset viindoo-17.0 \\
-                  --repo-map https://github.com/odoo/odoo=/mnt/odoo17 \\
-                  --repo-map https://github.com/Viindoo/tvtmaaddons=/mnt/viindoo17
+              python -m src.manager apply-preset <preset-name> \\
+                  --repo-map https://github.com/odoo/odoo=/mnt/odoo \\
+                  --repo-map https://github.com/your-org/your-addons=/mnt/addons
 
               # Preview without writing to DB:
-              python -m src.manager apply-preset viindoo-17.0 --dry-run
+              python -m src.manager apply-preset <preset-name> --dry-run
         """),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

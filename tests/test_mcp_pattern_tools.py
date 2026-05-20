@@ -90,8 +90,8 @@ def seeded_modules(clean_neo4j):
         edition="community",
     )
     viin_helpdesk = ModuleInfo(
-        name="viin_helpdesk", odoo_version=TEST_VERSION, repo="tvtmaaddons17",
-        path="/tvtmaaddons17/viin_helpdesk", depends=[], version_raw="",
+        name="viin_helpdesk", odoo_version=TEST_VERSION, repo="acme_addons17",
+        path="/acme_addons17/viin_helpdesk", depends=[], version_raw="",
         edition="viindoo",
     )
     writer.write_results([

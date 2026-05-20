@@ -1349,7 +1349,7 @@ def test_write_module_edition_viindoo_with_equivalent(writer, neo4j_driver):
     """Viindoo module with viindoo_equivalent_qname set → both props persisted."""
     module = ModuleInfo(
         name="viin_helpdesk", odoo_version=TEST_VERSION,
-        repo="tvtmaaddons17", path="/home/x/tvtmaaddons17/viin_helpdesk",
+        repo="acme_addons17", path="/home/x/acme_addons17/viin_helpdesk",
         depends=[], version_raw="",
         edition="viindoo", viindoo_equivalent_qname="viin_helpdesk",
     )
@@ -1826,7 +1826,7 @@ def test_module_merge_key_excludes_last_commit_sha(writer, neo4j_driver):
 
 def test_module_node_carries_profile_array(writer, neo4j_driver):
     """write_results with profiles arg writes m.profile list on Module node."""
-    profiles = ["viindoo_internal_17", "standard_viindoo_17", "odoo_17"]
+    profiles = ["internal_17", "standard_17", "odoo_17"]
     result = make_parse_result("sale", "sale.order")
     writer.write_results([result], profiles=profiles)
 
@@ -1842,7 +1842,7 @@ def test_module_node_carries_profile_array(writer, neo4j_driver):
 
 def test_model_node_carries_profile_array(writer, neo4j_driver):
     """write_results with profiles arg writes m.profile list on Model node."""
-    profiles = ["viindoo_internal_17", "odoo_17"]
+    profiles = ["internal_17", "odoo_17"]
     result = make_parse_result("sale", "sale.order")
     writer.write_results([result], profiles=profiles)
 
@@ -1859,7 +1859,7 @@ def test_model_node_carries_profile_array(writer, neo4j_driver):
 
 def test_profile_array_overwritten_on_reindex(writer, neo4j_driver):
     """Re-indexing the same profile is idempotent (no duplicates); union semantics."""
-    first_profiles = ["viindoo_internal_17"]
+    first_profiles = ["internal_17"]
     # Re-index with the same profile — should not duplicate entries.
     result = make_parse_result("sale", "sale.order")
     writer.write_results([result], profiles=first_profiles)
@@ -1872,7 +1872,7 @@ def test_profile_array_overwritten_on_reindex(writer, neo4j_driver):
         ).single()
 
     # Union semantics: re-indexing the same profile must not duplicate it.
-    assert rec["p"] == ["viindoo_internal_17"]
+    assert rec["p"] == ["internal_17"]
 
 
 def test_two_sibling_profiles_union_on_shared_module_node(writer, neo4j_driver):
@@ -1916,7 +1916,7 @@ def test_third_profile_does_not_evict_prior_sibling(writer, neo4j_driver):
 def test_same_profile_reindex_does_not_duplicate_entries(writer, neo4j_driver):
     """Index profile A twice; assert no duplicates in the profile array."""
     result = make_parse_result("sale", "sale.order")
-    profiles = ["viindoo_internal_17", "standard_viindoo_17", "odoo_17"]
+    profiles = ["internal_17", "standard_17", "odoo_17"]
     writer.write_results([result], profiles=profiles)
     writer.write_results([result], profiles=profiles)
 
@@ -1934,8 +1934,8 @@ def test_same_profile_reindex_does_not_duplicate_entries(writer, neo4j_driver):
 
 def test_profile_filter_in_ancestor_query(writer, neo4j_driver):
     """Cypher `$profile_name IN m.profile` returns node indexed under child profile."""
-    # Index "sale" module under viindoo_internal_17 (which includes odoo_17 in chain)
-    profiles = ["viindoo_internal_17", "standard_viindoo_17", "odoo_17"]
+    # Index "sale" module under internal_17 (which includes odoo_17 in chain)
+    profiles = ["internal_17", "standard_17", "odoo_17"]
     result = make_parse_result("sale", "sale.order")
     writer.write_results([result], profiles=profiles)
 

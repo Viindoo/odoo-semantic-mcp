@@ -78,7 +78,7 @@ def seeded_neo4j_http(neo4j_driver):
     )
 
     # Extended module: viin_sale extends sale.order
-    ext_mod = ModuleInfo("viin_sale", TEST_VERSION, "tvtmaaddons_test", "/tmp", ["sale"], "")
+    ext_mod = ModuleInfo("viin_sale", TEST_VERSION, "acme_addons_test", "/tmp", ["sale"], "")
     ext_model = ModelInfo(
         name="sale.order",
         module="viin_sale",
@@ -110,7 +110,7 @@ def seeded_neo4j_http(neo4j_driver):
 
     # Extended module: viin_account extends account.move + adds view inheritance
     viin_account_mod = ModuleInfo(
-        "viin_account", TEST_VERSION, "tvtmaaddons_test", "/tmp", ["account"], ""
+        "viin_account", TEST_VERSION, "acme_addons_test", "/tmp", ["account"], ""
     )
     viin_account_model = ModelInfo(
         name="account.move",

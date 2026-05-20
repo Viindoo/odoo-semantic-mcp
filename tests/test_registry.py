@@ -107,13 +107,13 @@ def test_build_registry_skips_non_installable(tmp_path):
 
 def test_build_registry_multi_repo(tmp_path):
     repo1 = make_git_repo(tmp_path / "odoo_17.0", "17.0")
-    repo2 = make_git_repo(tmp_path / "tvtmaaddons_17.0", "17.0")
+    repo2 = make_git_repo(tmp_path / "acme_addons_17.0", "17.0")
     make_manifest(repo1 / "sale",         "Sales",       "17.0.1.0.0", ["base"])
     make_manifest(repo2 / "viin_sale",    "Viin Sales",  "17.0.1.0.0", ["sale"])
     registry = build_registry([(str(repo1), "17.0"), (str(repo2), "17.0")])
     assert "sale" in registry["17.0"]
     assert "viin_sale" in registry["17.0"]
-    assert registry["17.0"]["viin_sale"].repo == "tvtmaaddons_17.0"
+    assert registry["17.0"]["viin_sale"].repo == "acme_addons_17.0"
 
 
 # --- Phase 0 v8/v9: ManifestFinder Protocol (M4.5 WI1.1) ---

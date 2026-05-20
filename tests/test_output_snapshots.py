@@ -715,8 +715,8 @@ def pattern_snapshot_db(neo4j_driver, monkeypatch_module):
         edition="community",
     )
     viin_sale_mod = ModuleInfo(
-        name="viin_sale", odoo_version=_PAT_SNAP_VERSION, repo="tvtmaaddons",
-        path="/tvtmaaddons/viin_sale", depends=[], version_raw="",
+        name="viin_sale", odoo_version=_PAT_SNAP_VERSION, repo="acme_addons",
+        path="/acme_addons/viin_sale", depends=[], version_raw="",
         edition="viindoo",
     )
     sale_model = ModelInfo(
@@ -1102,8 +1102,8 @@ class TestResolveViewSnapshots:
         viin_sale_mod = ModuleInfo(
             name="viin_sale",
             odoo_version=self._VIEW_SNAP_VERSION,
-            repo="tvtmaaddons",
-            path="/tvtmaaddons/viin_sale",
+            repo="acme_addons",
+            path="/acme_addons/viin_sale",
             depends=[],
             version_raw="",
         )
@@ -1195,8 +1195,8 @@ class TestResolveViewSnapshots:
         viin_sale_mod = ModuleInfo(
             name="viin_sale",
             odoo_version=self._VIEW_SNAP_VERSION,
-            repo="tvtmaaddons",
-            path="/tvtmaaddons/viin_sale",
+            repo="acme_addons",
+            path="/acme_addons/viin_sale",
             depends=[],
             version_raw="",
         )

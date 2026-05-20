@@ -134,7 +134,7 @@ def seeded_spec_neo4j(neo4j_driver):
     # User Module + Model + Method that uses deprecated 'name_get' (for find_deprecated_usage)
     # Written AFTER CoreSymbols so USES_CORE_SYMBOL edge MERGE finds its target.
     user_mod = ModuleInfo(
-        "viin_test_spec", SPEC_VERSION_FROM, "tvtmaaddons_test", "/tmp", [], "",
+        "viin_test_spec", SPEC_VERSION_FROM, "acme_addons_test", "/tmp", [], "",
     )
     user_method = MethodInfo(
         name="legacy_label", has_super_call=False, decorators=[],

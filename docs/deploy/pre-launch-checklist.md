@@ -119,7 +119,7 @@ Chạy từ Claude Code với key `osm_xxxx...` đã cấu hình:
 | 23 | `module_inspect` | `module_inspect(target="sale", odoo_version="17.0", kind="overview")` | Superset router: delegates to `describe_module`; discriminator in structuredContent | `[ ]` (M11 Wave D — ADR-0028) |
 | 24 | `entity_lookup` | `entity_lookup(target="sale.order.amount_total", odoo_version="17.0")` | Auto-detects entity type (model/field/method/view/module) and routes to appropriate resolve_* tool | `[ ]` (M11 Wave D — ADR-0028) |
 | 25 | `set_active_version` | `set_active_version(odoo_version="17.0")` | Persists sticky version for this API key; confirms `Active version set to 17.0` | `[ ]` (M11 Wave E — ADR-0029) |
-| 26 | `set_active_profile` | `set_active_profile(profile_name="erponline_17")` | Persists sticky profile for this API key; confirms `Active profile set to erponline_17` | `[ ]` (M11 Wave E — ADR-0029) |
+| 26 | `set_active_profile` | `set_active_profile(profile_name="acme_enterprise_17")` | Persists sticky profile for this API key; confirms `Active profile set to acme_enterprise_17` | `[ ]` (M11 Wave E — ADR-0029) |
 | 27 | `list_available_versions` | `list_available_versions()` | Lists all indexed Odoo versions for the current profile; marks current active version | `[ ]` (M11 Wave E — ADR-0029) |
 | 28 | `list_available_profiles` | `list_available_profiles()` | Lists all profiles accessible to this API key; marks current active profile | `[ ]` (M11 Wave E — ADR-0029) |
 

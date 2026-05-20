@@ -188,7 +188,7 @@ class TestSmokeCheckModuleExists:
         """Seed 1 viin_* module → check_module_exists shows edition=viindoo."""
         viin_mod = ModuleInfo(
             name="smoke_viin_helpdesk", odoo_version=SMOKE_VERSION,
-            repo="tvtmaaddons17", path="/p/smoke_viin_helpdesk",
+            repo="acme_addons17", path="/p/smoke_viin_helpdesk",
             depends=[], version_raw="", edition="viindoo",
         )
         smoke_writer.write_results([

@@ -13,7 +13,7 @@ This module provides two public APIs:
        root.add("├─ Defined in:     [odoo_17.0] sale")
        ext = root.add("├─ Extended by:")
        ext.add("[odoo_17.0] sale_stock")
-       ext.add("[erponline_17.0] viin_sale")
+       ext.add("[acme_enterprise_17.0] viin_sale")
        root.add("├─ Fields:         72")
        root.add("└─ Methods:        58")
        print(root.render())

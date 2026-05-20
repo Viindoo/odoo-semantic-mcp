@@ -329,10 +329,8 @@ def _detect_module_edition(
     Returns one of: 'viindoo' | 'oca' | 'community' | 'custom' | 'enterprise'.
     Order matters — earlier rules win (Viindoo > Enterprise > OCA > CE path > custom).
     """
-    # Viindoo: name prefix or path
+    # Viindoo: name prefix convention (viin_* and to_* are public product names)
     if module_name.startswith(("viin_", "to_")):
-        return "viindoo"
-    if any(seg in module_path for seg in ("tvtmaaddons", "erponline-enterprise")):
         return "viindoo"
     # Enterprise: OEEL-1 license (Odoo EE, path-independent)
     license_v = (manifest.get("license") or "").upper()

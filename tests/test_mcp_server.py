@@ -31,7 +31,7 @@ def seeded_neo4j(neo4j_driver):
         methods=[MethodInfo("action_post", has_super_call=False)],
     )
 
-    ext_mod = ModuleInfo("viin_account", TEST_VERSION, "tvtmaaddons_test", "/tmp",
+    ext_mod = ModuleInfo("viin_account", TEST_VERSION, "acme_addons_test", "/tmp",
                           ["account"], "")
     ext_model = ModelInfo(
         name="account.move", module="viin_account", odoo_version=TEST_VERSION,
@@ -1165,7 +1165,7 @@ def seeded_multi_extension(neo4j_driver):
         fields=[FieldInfo("name", "char")],
     )
 
-    ext1_mod = ModuleInfo("viin_purchase", MULTI_EXT_VERSION, "tvtmaaddons_test", "/tmp",
+    ext1_mod = ModuleInfo("viin_purchase", MULTI_EXT_VERSION, "acme_addons_test", "/tmp",
                           ["purchase"], "")
     ext1_model = ModelInfo(
         name="purchase.order", module="viin_purchase", odoo_version=MULTI_EXT_VERSION,
@@ -1213,7 +1213,7 @@ def seeded_multi_method(neo4j_driver):
         methods=[MethodInfo("action_post", has_super_call=False)],
     )
 
-    ext1_mod = ModuleInfo("viin_account", MULTI_MTH_VERSION, "tvtmaaddons_test", "/tmp",
+    ext1_mod = ModuleInfo("viin_account", MULTI_MTH_VERSION, "acme_addons_test", "/tmp",
                           ["account"], "")
     ext1_model = ModelInfo(
         name="account.move", module="viin_account", odoo_version=MULTI_MTH_VERSION,
@@ -1255,7 +1255,7 @@ def seeded_multi_view_ext(neo4j_driver):
         session.run("MATCH (n) WHERE n.odoo_version = $v DETACH DELETE n", v=MULTI_VIEW_VERSION)
 
     base_mod = ModuleInfo("sale", MULTI_VIEW_VERSION, "odoo_test", "/tmp", [], "")
-    ext1_mod = ModuleInfo("viin_sale", MULTI_VIEW_VERSION, "tvtmaaddons_test", "/tmp",
+    ext1_mod = ModuleInfo("viin_sale", MULTI_VIEW_VERSION, "acme_addons_test", "/tmp",
                           ["sale"], "")
     ext2_mod = ModuleInfo("custom_sale", MULTI_VIEW_VERSION, "custom_test", "/tmp",
                           ["sale"], "")

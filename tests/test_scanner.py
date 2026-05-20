@@ -4,7 +4,7 @@ from tests.conftest import make_git_repo
 
 
 def test_get_git_branch_returns_version(tmp_path):
-    repo = make_git_repo(tmp_path / "tvtmaaddons_17.0", "17.0")
+    repo = make_git_repo(tmp_path / "acme_addons_17.0", "17.0")
     assert get_git_branch(str(repo)) == "17.0"
 
 
@@ -22,7 +22,7 @@ def test_is_odoo_version_branch():
 
 
 def test_scan_repos_finds_versioned_subdirs(tmp_path):
-    make_git_repo(tmp_path / "tvtmaaddons_17.0", "17.0")
+    make_git_repo(tmp_path / "acme_addons_17.0", "17.0")
     make_git_repo(tmp_path / "odoo_16.0", "16.0")
     results = scan_repos([str(tmp_path)])
     versions = {v for _, v in results}

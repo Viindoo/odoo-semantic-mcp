@@ -555,12 +555,12 @@ class TestColdStartUpsert:
         checkout = _make_checkout_pg(session_db)
 
         with patch("src.mcp.server._checkout_pg", checkout):
-            set_active_profile_db(_TEST_KEY_A, "viindoo_internal_17")
+            set_active_profile_db(_TEST_KEY_A, "internal_17")
             _clear_session_cache()
             state = get_session_state(_TEST_KEY_A)
 
         assert state is not None
-        assert state.profile_name == "viindoo_internal_17"
+        assert state.profile_name == "internal_17"
 
 
 # ===========================================================================
