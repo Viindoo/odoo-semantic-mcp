@@ -32,8 +32,9 @@ the public name ``format_next_step``.
 NEXT_STEP_HINTS: dict[str, list[str]] = {
     # Superset discriminator tools (ADR-0028, v0.6+) — 10 flat shims removed.
     "model_inspect": [
-        "model_inspect(model='{name}', method='fields', odoo_version='{ver}') for full field list",
-        "model_inspect(model='{name}', method='methods', odoo_version='{ver}') for behavior",
+        "impact_analysis(entity_type='model', entity_name='{name}',"
+        " odoo_version='{ver}') for change blast radius",
+        "find_examples(query='{name}', odoo_version='{ver}') for real-world usage",
     ],
     "entity_lookup": [
         "find_examples(query='{name} xpath', odoo_version='{ver}') for inheritance patterns",
