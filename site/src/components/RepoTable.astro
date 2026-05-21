@@ -182,6 +182,7 @@ function truncate(text: string | null | undefined, maxLen: number): string {
             <th class="px-4 py-3 text-left">Clone</th>
             <th class="px-4 py-3 text-left">Last Job</th>
             <th class="px-4 py-3 text-left">Last Indexed</th>
+            <th class="px-4 py-3 text-left" title="CoreSymbol count in graph (0 = core API not indexed for this version)">Core Index</th>
             <th class="px-4 py-3 text-right">Actions</th>
           </tr>
         </thead>
@@ -225,6 +226,13 @@ function truncate(text: string | null | undefined, maxLen: number): string {
                 </td>
                 <td class="px-4 py-3">
                   <span class="text-xs text-gray-600">{formatTimestamp(repo.last_indexed_at)}</span>
+                </td>
+                <td class="px-4 py-3">
+                  <span
+                    data-testid={`core-index-badge-${repo.id}`}
+                    data-repo-id={String(repo.id)}
+                    class="core-index-badge text-xs text-gray-400"
+                  >—</span>
                 </td>
                 <td class="px-4 py-3 text-right">
                   <div class="flex items-center justify-end gap-2">
@@ -276,7 +284,7 @@ function truncate(text: string | null | undefined, maxLen: number): string {
                 class="edit-repo-form-row bg-blue-50"
                 hidden
               >
-                <td colspan="5" class="px-4 py-4">
+                <td colspan="6" class="px-4 py-4">
                   <form
                     data-testid={`edit-repo-form-${repo.id}`}
                     data-edit-repo-form
@@ -543,6 +551,38 @@ function truncate(text: string | null | undefined, maxLen: number): string {
       }
     });
   });
+
+  // Core Index badge — fetch CoreSymbol count per repo and render badge.
+  // Called once on page load; gracefully degrades on Neo4j unavailability.
+  async function loadCoreIndexBadges(): Promise<void> {
+    const badges = document.querySelectorAll<HTMLElement>('.core-index-badge');
+    await Promise.all(Array.from(badges).map(async (badge) => {
+      const repoId = badge.dataset.repoId;
+      if (!repoId) return;
+      try {
+        const res = await fetch(`/api/repos/repos/${repoId}/core-symbol-counts`);
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        const counts: Record<string, number> = data.counts ?? {};
+        const total = Object.values(counts).reduce((s, n) => s + n, 0);
+        if (total > 0) {
+          const parts = Object.entries(counts)
+            .filter(([, n]) => n > 0)
+            .map(([v, n]) => `${v}: ${n.toLocaleString()}`)
+            .join(', ');
+          badge.textContent = parts;
+          badge.className = badge.className.replace('text-gray-400', 'text-green-700');
+          badge.classList.add('font-medium');
+        } else {
+          badge.textContent = 'not indexed';
+          badge.className = badge.className.replace('text-gray-400', 'text-amber-600');
+        }
+      } catch {
+        // Neo4j unreachable — leave dash placeholder
+      }
+    }));
+  }
+  loadCoreIndexBadges();
 
   // SSH key dropdown toggle — show when URL starts with git@, hide otherwise.
   // Works for all repo-form elements (currently one add-repo-form on the page).
