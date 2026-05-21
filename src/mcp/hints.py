@@ -27,7 +27,8 @@ been removed from ``server.py`` — the relocated helper is exported under
 the public name ``format_next_step``.
 """
 
-# Per ADR-0023 §4.3 — 13 drill-down tools (v0.6: 10 shims removed; M10A: +2 stylesheet).
+# Per ADR-0023 §4.3 — 17 drill-down tools (v0.6: 10 shims removed; M10A: +2 stylesheet;
+# M10.5 P2: +4 ORM-validation tools).
 # Up to 2 hints each.
 # Templates use str.format keyword args (name, ver, module, field, method, xmlid).
 # Callers pass relevant context kwargs to hints_for(); unused ones are ignored.

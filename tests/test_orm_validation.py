@@ -159,6 +159,14 @@ def test_orm_chain_empty_path(orm_tools):
     assert out.startswith("Error:")
 
 
+def test_orm_chain_dots_only_path_no_crash(orm_tools):
+    """Dots-only path (e.g. '.') must return an Error string, not raise TypeError."""
+    resolve_orm_chain, *_ = orm_tools
+    for bad in (".", "..", "  ."):
+        out = resolve_orm_chain("sale.order", bad, TEST_VERSION)
+        assert out.startswith("Error:"), bad
+
+
 # --- validate_domain -----------------------------------------------------
 
 def test_validate_domain_all_ok(orm_tools):

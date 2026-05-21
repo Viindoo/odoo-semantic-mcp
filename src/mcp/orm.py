@@ -50,6 +50,7 @@ def _lookup_field(
         MATCH (f:Field {name: $fn, model: $mn, odoo_version: $v})
         WHERE ($pn IS NULL OR $pn IN f.profile)
         RETURN f.ttype AS ttype, f.comodel_name AS comodel
+        ORDER BY f.module ASC
         LIMIT 1
         """,
         fn=field, mn=model, v=odoo_version, pn=profile_name,
@@ -70,6 +71,7 @@ def _lookup_field(
         MATCH (f:Field {name: $fn, model: parent.name, odoo_version: $v})
         WHERE ($pn IS NULL OR $pn IN f.profile)
         RETURN f.ttype AS ttype, f.comodel_name AS comodel
+        ORDER BY parent.name ASC, f.module ASC
         LIMIT 1
         """,
         fn=field, mn=model, v=odoo_version, pn=profile_name,
@@ -98,6 +100,12 @@ def _traverse_field_chain(
     recorded comodel; the terminal hop may be any type.
     """
     parts = [p for p in dotted_path.split(".") if p]
+    if not parts:
+        # Dots-only / empty path — no hop to resolve. Guard so callers never
+        # subscript a None terminal (e.g. resolve_orm_chain('model', '.')).
+        return {"steps": [], "terminal": None,
+                "error": {"step": 0, "model": model, "field": dotted_path,
+                          "ttype": None, "reason": "missing"}}
     steps: list[dict] = []
     current_model = model
     last_idx = len(parts) - 1
@@ -174,7 +182,7 @@ def _resolve_orm_chain(
     from src.mcp import server as srv
 
     dotted_path = (dotted_path or "").strip()
-    if not dotted_path:
+    if not [p for p in dotted_path.split(".") if p]:
         return ("Error: resolve_orm_chain requires a non-empty dotted_path"
                 " (e.g. 'partner_id.country_id.code').")
 
@@ -415,10 +423,6 @@ def _validate_relation(
         msg = f"├─ MISMATCH {field} is {info['ttype']} -> {actual or '(no comodel recorded)'}" \
               f" (expected {target_model})"
         lines.append(msg)
-        if actual:
-            hint = _suggest(target_model, [actual])
-            if hint:
-                lines.append(f"│   suggestion: field actually points at '{actual}'")
     footer = hints_for("validate_relation", name=model, field=field, ver=version)
     if footer:
         lines.append(footer)
