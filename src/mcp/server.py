@@ -22,6 +22,7 @@ from src.constants import (
     LIST_PREVIEW_FIELDS_MAX,
     LIST_PREVIEW_MAX_ITEMS,
     LIST_PREVIEW_PATCHES_MAX,
+    MAGIC_FIELDS,
     PG_POOL_MAX_CONN,
     PG_POOL_MIN_CONN,
     REL_DEPENDS_ON,
@@ -320,7 +321,26 @@ def _resolve_model(
     model_name: str,
     odoo_version: str = "auto",
     profile_name: str | None = None,
+    from_module: str | None = None,
 ) -> str:
+    """Return a tree overview of a model, optionally scoped to a single declaring module.
+
+    Parameters
+    ----------
+    model_name:
+        Dotted model name, e.g. ``sale.order``.
+    odoo_version:
+        Odoo version string, e.g. ``17.0``. ``"auto"`` resolves to the latest
+        indexed version.
+    profile_name:
+        Optional profile filter.
+    from_module:
+        When set, restrict the inheritance-chain layers to rows where the
+        declaring module equals this value. Layers from other modules are
+        silently filtered out.  ``"<builtin>"`` is never returned regardless
+        of this parameter (magic fields live in synthetic space only).
+        Default ``None`` preserves the existing behaviour (all modules).
+    """
     with _get_driver().session() as session:
         odoo_version = _resolve_version(odoo_version, session)
 
@@ -336,6 +356,7 @@ def _resolve_model(
             f"""
             MATCH (m:Model {{name: $name, odoo_version: $v}})-[:DEFINED_IN]->(mod:Module)
             WHERE ($profile_name IS NULL OR $profile_name IN m.profile)
+              AND ($from_module IS NULL OR m.module = $from_module)
             WITH m, mod,
                  CASE WHEN coalesce(m.is_definition, false) THEN 0 ELSE 1 END AS is_def_rank,
                  COUNT {{
@@ -351,9 +372,15 @@ def _resolve_model(
                      edition_rank ASC, mod_name ASC
             """,
             name=model_name, v=odoo_version, profile_name=profile_name,
+            from_module=from_module,
         ).data()
 
         if not layers:
+            if from_module:
+                return (
+                    f"Model '{model_name}' not found in module '{from_module}'"
+                    f" (Odoo {odoo_version})."
+                )
             return f"Model '{model_name}' not found in Odoo {odoo_version}."
 
         base = layers[0]
@@ -375,6 +402,8 @@ def _resolve_model(
         """, name=model_name, v=odoo_version).data()
 
     lines = [f"{model_name} (Odoo {odoo_version})"]
+    if from_module:
+        lines[0] += f" [from_module={from_module}]"
     lines.append(f"├─ Defined in:     [{base['repo']}] {base['module_name']}")
 
     if parents:
@@ -411,7 +440,27 @@ def _resolve_field(
     field_name: str,
     odoo_version: str = "auto",
     profile_name: str | None = None,
+    from_module: str | None = None,
 ) -> str:
+    """Return detail about a field, optionally scoped to a single declaring module.
+
+    Parameters
+    ----------
+    model_name:
+        Dotted model name, e.g. ``sale.order``.
+    field_name:
+        Field name to look up.
+    odoo_version:
+        Odoo version string. ``"auto"`` resolves to the latest indexed version.
+    profile_name:
+        Optional profile filter.
+    from_module:
+        When set, only ``Declared in`` rows whose module equals this value are
+        returned.  When the field is a magic field (``id``, ``display_name``,
+        etc.) it is declared in ``"<builtin>"``; setting ``from_module`` will
+        suppress magic-field synthetic rows since ``"<builtin>"`` will not match
+        any real module name.  Default ``None`` preserves existing behaviour.
+    """
     with _get_driver().session() as session:
         odoo_version = _resolve_version(odoo_version, session)
 
@@ -419,6 +468,7 @@ def _resolve_field(
         records = session.run(f"""
             MATCH (f:Field {{name: $fn, model: $mn, odoo_version: $v}})
             WHERE ($profile_name IS NULL OR $profile_name IN f.profile)
+              AND ($from_module IS NULL OR f.module = $from_module)
             OPTIONAL MATCH (mod:Module {{name: f.module, odoo_version: $v}})
             OPTIONAL MATCH (m_node:Model {{name: $mn, module: f.module, odoo_version: $v}})
             WITH f, mod, m_node,
@@ -433,9 +483,32 @@ def _resolve_field(
             RETURN f, f.module AS module_name, mod.repo AS repo
             ORDER BY is_def_rank ASC, field_count DESC, dependents DESC,
                      edition_rank ASC, mod_name ASC
-        """, fn=field_name, mn=model_name, v=odoo_version, profile_name=profile_name).data()
+        """, fn=field_name, mn=model_name, v=odoo_version, profile_name=profile_name,
+            from_module=from_module).data()
 
+    # D2: If not found in graph, check whether it's a magic field.
+    # Magic fields are synthetic — not in Neo4j — so we build a synthetic record.
     if not records:
+        if from_module is None and field_name in MAGIC_FIELDS:
+            ttype, _comodel = MAGIC_FIELDS[field_name]
+            lines = [
+                f"{model_name}.{field_name} (Odoo {odoo_version})",
+                f"├─ Type:     {ttype}",
+                "├─ Computed: No",
+                "├─ Stored:   Yes",
+                "├─ Required: No",
+                "├─ Related:  —",
+                "├─ Declared in:",
+                "│   └─ <builtin>  [ORM magic field — injected at runtime, not in source]",
+            ]
+            lines.append(format_next_step([
+                f"find_examples(query='{model_name}.{field_name} usage'"
+                f", odoo_version='{odoo_version}') for real-world patterns",
+                f"impact_analysis(entity_type='field'"
+                f", entity_name='{model_name}.{field_name}'"
+                f", odoo_version='{odoo_version}') for blast radius",
+            ]))
+            return "\n".join(lines)
         return (
             f"Field '{field_name}' not found on model"
             f" '{model_name}' in Odoo {odoo_version}."
@@ -1506,10 +1579,89 @@ def _match_lint_rule(code: str, rule: dict) -> bool:
     return len(overlap) >= 2
 
 
+def _build_noqa_suppress(code: str) -> dict[int, set[str]]:
+    """Parse noqa comments and return a suppress-set keyed by 1-based line number.
+
+    Each value is a set of rule IDs suppressed on that line, or ``{"*"}`` for a
+    bare ``noqa`` (suppresses all rules on that line).
+
+    Examples (comment marker elided to avoid ruff false-positive)::
+
+        noqa: E8001          → {1: {"E8001"}}
+        noqa: E8001, W9002   → {1: {"E8001", "W9002"}}
+        noqa                 → {1: {"*"}}
+    """
+    import re as _re
+
+    suppress: dict[int, set[str]] = {}
+    for lineno, line in enumerate(code.splitlines(), start=1):
+        # Match bare noqa comment with optional rule list.
+        m = _re.search(r"#\s*noqa(?::\s*([A-Za-z0-9,\s]+))?", line)
+        if not m:
+            continue
+        ids_str = m.group(1)
+        if ids_str:
+            ids = {s.strip() for s in ids_str.split(",") if s.strip()}
+        else:
+            ids = {"*"}
+        suppress[lineno] = ids
+    return suppress
+
+
+def _match_lint_rule_lines(code: str, rule: dict) -> list[int]:
+    """Return 1-based line numbers in *code* where *rule* matches.
+
+    Uses the same token-overlap logic as :func:`_match_lint_rule` but applies
+    it per-line so we can honour ``# noqa`` suppression.  A line matches when
+    it contains ≥2 significant tokens from the rule message.
+
+    Returns an empty list when the rule message has fewer than 2 significant
+    tokens (same contract as ``_match_lint_rule`` — the rule never fires).
+    """
+    import re as _re
+
+    msg = (rule.get("message") or "").lower()
+    if not msg:
+        return []
+    rule_tokens = {
+        t for t in _re.split(r"[^a-z_]+", msg)
+        if len(t) > 3 and t not in _LINT_STOPWORDS
+    }
+    if len(rule_tokens) < 2:
+        return []
+
+    # First check the whole snippet (existing behaviour) — if not triggered at
+    # all, skip per-line work.
+    code_tokens_all = set(_re.split(r"[^a-z_]+", (code or "").lower()))
+    if len(rule_tokens & code_tokens_all) < 2:
+        return []
+
+    # Per-line pass to get line numbers.
+    hit_lines: list[int] = []
+    for lineno, line in enumerate(code.splitlines(), start=1):
+        line_lc = line.lower()
+        line_tokens = set(_re.split(r"[^a-z_]+", line_lc))
+        if len(rule_tokens & line_tokens) >= 2:
+            hit_lines.append(lineno)
+    # If the whole-code match fired but no individual line triggered ≥2 tokens
+    # (tokens spread across lines), attribute the violation to line 1 as a
+    # conservative fallback so the caller still receives it.
+    if not hit_lines:
+        hit_lines = [1]
+    return hit_lines
+
+
 def _lint_check(
     code: str, odoo_version: str = "auto", language: str = "python",
 ) -> str:
-    """Pattern-match user code against indexed LintRule.message (V0)."""
+    """Pattern-match user code against indexed LintRule.message (V0).
+
+    Supports ``# noqa`` suppression per line:
+
+    * ``# noqa: E8001`` — suppress rule ``E8001`` on that line only.
+    * ``# noqa: E8001, W9002`` — suppress multiple rules on that line.
+    * ``# noqa`` (bare) — suppress all rules matched on that line.
+    """
     if language not in _VALID_LINT_LANGUAGES:
         valid = ", ".join(sorted(_VALID_LINT_LANGUAGES))
         return (
@@ -1536,7 +1688,24 @@ def _lint_check(
             RETURN sm.curate_status AS curate_status
         """, v=odoo_version).single()
         curate_status = curate_rec["curate_status"] if curate_rec else None
-    violations = [r for r in rules if _match_lint_rule(code, r)]
+
+    # Build noqa suppress set from the input code.
+    suppress = _build_noqa_suppress(code)
+
+    violations: list[dict] = []
+    for rule in rules:
+        hit_lines = _match_lint_rule_lines(code, rule)
+        if not hit_lines:
+            continue
+        rule_id = rule.get("rule_id") or "?"
+        # A violation is suppressed only when ALL matched lines suppress this rule.
+        suppressed_lines = sum(
+            1 for ln in hit_lines
+            if ln in suppress and ("*" in suppress[ln] or rule_id in suppress[ln])
+        )
+        if suppressed_lines < len(hit_lines):
+            violations.append(rule)
+
     result = _format_lint_check(violations, odoo_version, code, language)
     if curate_status == "pending":
         result = (
@@ -2298,7 +2467,9 @@ def _list_fields(
     """Layer-2 — enumerate fields on a model, grouped by module.
 
     `kind` filters by Field.ttype (e.g. 'monetary', 'many2one').
-    `module` restricts to one declaring module.
+    `module` restricts to one declaring module.  When ``module`` is set,
+    magic-field synthetic rows are suppressed (module=``"<builtin>"`` would
+    not match any real module filter value).
     `limit` caps the Cypher query size; the render cap is LIST_PREVIEW_FIELDS_MAX.
     `start_index` is a zero-based pagination cursor (Cypher SKIP).
     `api_key_id` scopes minted refs to the calling tenant (default: 'anonymous').
@@ -2346,6 +2517,27 @@ def _list_fields(
             profile_name=profile_name,
         ).single()
         total = total_rec["c"] if total_rec else 0
+
+    # D2: Inject magic-field synthetic rows for the first page only (start_index=0)
+    # and only when no module filter suppresses them.
+    # Dedup: skip a magic field if it already appears in Neo4j rows (model override).
+    if start_index == 0 and module is None:
+        existing_names = {r["name"] for r in rows}
+        magic_rows = [
+            {
+                "name": fname,
+                "ttype": ttype,
+                "module": "<builtin>",
+                "repo": None,
+                "edition_rank": -1,   # float before community rows
+                "mod_name": "<builtin>",
+            }
+            for fname, (ttype, _comodel) in MAGIC_FIELDS.items()
+            if fname not in existing_names
+            and (kind is None or kind == ttype)
+        ]
+        rows = magic_rows + list(rows)
+        total = total + len(magic_rows)
 
     header = f"Fields of {model} (Odoo {odoo_version})"
     if total == 0:
@@ -4324,6 +4516,7 @@ def model_inspect(
     method_name: str | None = None,
     start_index: int = 0,
     limit: int = 200,
+    from_module: str | None = None,
 ) -> ToolResult:
     """Method-discriminator superset for model-scoped reads. See ADR-0028.
 
@@ -4346,6 +4539,8 @@ def model_inspect(
         method_name: Required when method='method'. Method name.
         start_index: Pagination cursor for fields/methods/views (zero-based).
         limit: Max rows per page for fields/methods/views (default 200).
+        from_module: Optional module filter — restrict results to rows declared
+            in this module only (summary and field sub-views).
 
     Returns:
         Tree text identical to the underlying tool's output.
@@ -4364,6 +4559,7 @@ def model_inspect(
         api_key_id=_get_api_key_id(),
         start_index=start_index,
         limit=limit,
+        from_module=from_module,
     )
     return ToolResult(content=[TextContent(type="text", text=text)])
 
@@ -4426,6 +4622,7 @@ def entity_lookup(
     method_name: str | None = None,
     xmlid: str | None = None,
     name: str | None = None,
+    from_module: str | None = None,
 ) -> ToolResult:
     """Unified single-entity lookup by kind discriminator. See ADR-0028.
 
@@ -4447,6 +4644,8 @@ def entity_lookup(
         method_name: Required for kind='method'.
         xmlid: Required for kind='view'.
         name: Required for kind in {module, pattern}.
+        from_module: Optional module filter — restrict results to rows declared
+            in this module only (kind='model' and kind='field').
 
     Returns:
         Tree text identical to the underlying tool's output.
@@ -4465,6 +4664,7 @@ def entity_lookup(
         xmlid=xmlid,
         name=name,
         api_key_id=_get_api_key_id(),
+        from_module=from_module,
     )
     return ToolResult(content=[TextContent(type="text", text=text)])
 

@@ -2973,3 +2973,244 @@ def test_mcp_resources_registered(seeded_neo4j):
     ]
     for uri in expected_uris:
         assert uri in templates, f"Expected resource URI {uri!r} not registered"
+
+
+# ===========================================================================
+# M10A D2 — Magic-fields auto-injection
+# ===========================================================================
+
+_MAGIC_FIELD_NAMES = ("id", "display_name", "create_uid", "create_date",
+                      "write_uid", "write_date")
+_M10A_D2_VERSION = "74.0"
+
+
+def _cleanup_d2(driver):
+    _cleanup_version(driver, _M10A_D2_VERSION)
+
+
+def test_list_fields_includes_magic_fields(neo4j_driver):
+    """_list_fields returns all 6 magic fields as synthetic rows (D2)."""
+    _cleanup_d2(neo4j_driver)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        mod = ModuleInfo("sale", _M10A_D2_VERSION, "odoo_test", "/tmp", [], "")
+        mdl = ModelInfo(
+            name="sale.order", module="sale", odoo_version=_M10A_D2_VERSION,
+            fields=[FieldInfo("name", "char")],
+            methods=[],
+        )
+        writer.write_results([ParseResult(module=mod, models=[mdl])])
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._list_fields("sale.order", _M10A_D2_VERSION)
+        for magic in _MAGIC_FIELD_NAMES:
+            assert magic in out, (
+                f"Magic field '{magic}' missing from _list_fields output.\n{out}"
+            )
+        assert "<builtin>" in out, "Expected '<builtin>' module marker in output"
+    finally:
+        _cleanup_d2(neo4j_driver)
+
+
+def test_list_fields_dedup_magic_field_overridden(neo4j_driver):
+    """When model declares 'id' itself, synthetic magic 'id' must not be duplicated (D2)."""
+    _cleanup_d2(neo4j_driver)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        mod = ModuleInfo("sale", _M10A_D2_VERSION, "odoo_test", "/tmp", [], "")
+        mdl = ModelInfo(
+            name="sale.order", module="sale", odoo_version=_M10A_D2_VERSION,
+            fields=[FieldInfo("id", "integer")],
+            methods=[],
+        )
+        writer.write_results([ParseResult(module=mod, models=[mdl])])
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._list_fields("sale.order", _M10A_D2_VERSION)
+        # Count occurrences of the field name in output — must be exactly 1.
+        id_occurrences = sum(
+            1 for line in out.splitlines()
+            if line.strip().startswith("id ")
+            or line.strip().startswith("[ref=") and " id " in line
+        )
+        assert id_occurrences == 1, (
+            f"'id' appears {id_occurrences} times — expected exactly 1 (dedup).\n{out}"
+        )
+    finally:
+        _cleanup_d2(neo4j_driver)
+
+
+def test_resolve_field_magic_field_synthetic(neo4j_driver):
+    """_resolve_field for magic field 'id' returns synthetic builtin info (D2)."""
+    _cleanup_d2(neo4j_driver)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        mod = ModuleInfo("sale", _M10A_D2_VERSION, "odoo_test", "/tmp", [], "")
+        mdl = ModelInfo(
+            name="sale.order", module="sale", odoo_version=_M10A_D2_VERSION,
+            fields=[FieldInfo("name", "char")],
+            methods=[],
+        )
+        writer.write_results([ParseResult(module=mod, models=[mdl])])
+        writer.close()
+
+        srv = _import_server_module()
+        out = srv._resolve_field("sale.order", "id", _M10A_D2_VERSION)
+        assert "integer" in out.lower(), f"Expected 'integer' type for magic 'id'.\n{out}"
+        assert "<builtin>" in out, f"Expected '<builtin>' marker.\n{out}"
+    finally:
+        _cleanup_d2(neo4j_driver)
+
+
+def test_resolve_field_magic_not_shown_when_from_module_set(neo4j_driver):
+    """_resolve_field with from_module set suppresses magic-field synthetic rows (D2+D3)."""
+    _cleanup_d2(neo4j_driver)
+    try:
+        writer = Neo4jWriter(
+            uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+            user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+            password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+        )
+        writer.setup_indexes()
+        mod = ModuleInfo("sale", _M10A_D2_VERSION, "odoo_test", "/tmp", [], "")
+        mdl = ModelInfo(
+            name="sale.order", module="sale", odoo_version=_M10A_D2_VERSION,
+            fields=[FieldInfo("name", "char")],
+            methods=[],
+        )
+        writer.write_results([ParseResult(module=mod, models=[mdl])])
+        writer.close()
+
+        srv = _import_server_module()
+        # 'id' is only a magic field; from_module='sale' should not match '<builtin>'
+        out = srv._resolve_field("sale.order", "id", _M10A_D2_VERSION, from_module="sale")
+        assert "not found" in out.lower(), (
+            f"Expected 'not found' when from_module='sale' for magic-only 'id'.\n{out}"
+        )
+    finally:
+        _cleanup_d2(neo4j_driver)
+
+
+# ===========================================================================
+# M10A D3 — from_module param
+# ===========================================================================
+
+_M10A_D3_VERSION = "73.0"
+
+
+def _cleanup_d3(driver):
+    _cleanup_version(driver, _M10A_D3_VERSION)
+
+
+def _seed_d3(neo4j_driver):
+    """Seed two-module setup: base 'sale' + extension 'sale_ext'."""
+    writer = Neo4jWriter(
+        uri=os.getenv("NEO4J_TEST_URI", "bolt://localhost:7687"),
+        user=os.getenv("NEO4J_TEST_USER", "neo4j"),
+        password=os.getenv("NEO4J_TEST_PASSWORD", "password"),
+    )
+    writer.setup_indexes()
+    base_mod = ModuleInfo("sale", _M10A_D3_VERSION, "odoo_test", "/tmp", [], "")
+    base_mdl = ModelInfo(
+        name="sale.order", module="sale", odoo_version=_M10A_D3_VERSION,
+        fields=[FieldInfo("name", "char"), FieldInfo("amount_total", "float")],
+        methods=[],
+    )
+    ext_mod = ModuleInfo("sale_ext", _M10A_D3_VERSION, "addons_test", "/tmp", ["sale"], "")
+    ext_mdl = ModelInfo(
+        name="sale.order", module="sale_ext", odoo_version=_M10A_D3_VERSION,
+        inherit=["sale.order"],
+        fields=[FieldInfo("x_note", "text")],
+        methods=[],
+    )
+    writer.write_results([
+        ParseResult(module=base_mod, models=[base_mdl]),
+        ParseResult(module=ext_mod, models=[ext_mdl]),
+    ])
+    writer.close()
+
+
+def test_resolve_model_from_module_filters(neo4j_driver):
+    """_resolve_model(from_module='sale') shows only the sale module (D3)."""
+    _cleanup_d3(neo4j_driver)
+    try:
+        _seed_d3(neo4j_driver)
+        srv = _import_server_module()
+        out = srv._resolve_model("sale.order", _M10A_D3_VERSION, from_module="sale")
+        assert "sale" in out, f"Expected 'sale' in output.\n{out}"
+        assert "sale_ext" not in out, (
+            f"Expected 'sale_ext' to be filtered out when from_module='sale'.\n{out}"
+        )
+    finally:
+        _cleanup_d3(neo4j_driver)
+
+
+def test_resolve_model_from_module_nonexistent_returns_not_found(neo4j_driver):
+    """_resolve_model with nonexistent from_module returns not-found hint (D3)."""
+    _cleanup_d3(neo4j_driver)
+    try:
+        _seed_d3(neo4j_driver)
+        srv = _import_server_module()
+        out = srv._resolve_model("sale.order", _M10A_D3_VERSION, from_module="no_such_module")
+        assert "not found" in out.lower(), (
+            f"Expected 'not found' for nonexistent from_module.\n{out}"
+        )
+    finally:
+        _cleanup_d3(neo4j_driver)
+
+
+def test_resolve_model_from_module_none_returns_all(neo4j_driver):
+    """_resolve_model(from_module=None) shows all modules — backward compat (D3)."""
+    _cleanup_d3(neo4j_driver)
+    try:
+        _seed_d3(neo4j_driver)
+        srv = _import_server_module()
+        out = srv._resolve_model("sale.order", _M10A_D3_VERSION)
+        assert "sale" in out, f"Expected 'sale' in output.\n{out}"
+        # sale_ext shows under 'Extended by' when default None
+        assert "sale_ext" in out, (
+            f"Expected 'sale_ext' visible when from_module=None.\n{out}"
+        )
+    finally:
+        _cleanup_d3(neo4j_driver)
+
+
+def test_resolve_field_from_module_filters(neo4j_driver):
+    """_resolve_field(from_module='sale_ext') shows only sale_ext declaration (D3)."""
+    _cleanup_d3(neo4j_driver)
+    try:
+        _seed_d3(neo4j_driver)
+        srv = _import_server_module()
+        # amount_total is only in base 'sale' — from_module='sale_ext' yields not found
+        out = srv._resolve_field(
+            "sale.order", "amount_total", _M10A_D3_VERSION, from_module="sale_ext",
+        )
+        assert "not found" in out.lower(), (
+            f"amount_total should not be visible under sale_ext.\n{out}"
+        )
+        # x_note is only in sale_ext
+        out2 = srv._resolve_field(
+            "sale.order", "x_note", _M10A_D3_VERSION, from_module="sale_ext",
+        )
+        assert "sale_ext" in out2, (
+            f"x_note should be visible under from_module='sale_ext'.\n{out2}"
+        )
+    finally:
+        _cleanup_d3(neo4j_driver)
