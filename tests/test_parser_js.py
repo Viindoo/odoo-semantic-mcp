@@ -5,6 +5,7 @@ from src.indexer.models import JSGraphResult, ModuleInfo
 from src.indexer.parser_js import (
     _detect_era,
     _extract_era3_components,
+    _extract_era3_patches,
     parse_file,
     parse_module_graph,
 )
@@ -375,3 +376,116 @@ class MyComponent extends Component {
     assert result.components == [], (
         "_extract_era3_components must return early for v9 — OWL does not exist pre-v14"
     )
+
+
+# --- era3 patch() guard: OWL patch() only exists v14+ ---
+
+def test_era3_patches_skipped_for_v13(tmp_path):
+    """_extract_era3_patches must produce no JSPatchInfo for v13 modules.
+
+    OWL patch() only exists from v14+. A v13 JS file using era3 syntax
+    must not generate JSPatch nodes — they would be anachronistic stubs.
+
+    This is a pure unit test — does not require Neo4j.
+    """
+    import tree_sitter_javascript as tsjs
+    from tree_sitter import Language, Parser
+
+    JS_LANGUAGE = Language(tsjs.language())
+    parser = Parser(JS_LANGUAGE)
+
+    source_code = b"""
+/** @odoo-module **/
+import { patch } from "@web/core/utils/patch";
+patch(MyComp.prototype, "my_patch", { setup() {} });
+"""
+    tree = parser.parse(source_code)
+
+    v13_module = ModuleInfo(
+        name="some_v13_module", odoo_version="13.0",
+        repo="v13_repo", path=str(tmp_path), depends=[], version_raw="",
+    )
+    result = JSGraphResult(module=v13_module)
+
+    _extract_era3_patches(tree, source_code, v13_module, str(tmp_path / "test.js"), result)
+
+    assert result.patches == [], (
+        "_extract_era3_patches must return early for v13 — OWL patch() does not exist pre-v14"
+    )
+
+
+def test_era3_patches_skipped_for_v8(tmp_path):
+    """_extract_era3_patches must produce no JSPatchInfo for v8 modules."""
+    import tree_sitter_javascript as tsjs
+    from tree_sitter import Language, Parser
+
+    JS_LANGUAGE = Language(tsjs.language())
+    parser = Parser(JS_LANGUAGE)
+
+    source_code = b"""
+/** @odoo-module **/
+import { patch } from "@web/core/utils/patch";
+patch(SomeWidget.prototype, "some_patch", {});
+"""
+    tree = parser.parse(source_code)
+
+    v8_module = ModuleInfo(
+        name="some_v8_module", odoo_version="8.0",
+        repo="v8_repo", path=str(tmp_path), depends=[], version_raw="",
+    )
+    result = JSGraphResult(module=v8_module)
+
+    _extract_era3_patches(tree, source_code, v8_module, str(tmp_path / "test.js"), result)
+
+    assert result.patches == [], (
+        "_extract_era3_patches must return early for v8 — OWL patch() does not exist pre-v14"
+    )
+
+
+def test_era3_patches_extracted_for_v14(tmp_path):
+    """Regression: _extract_era3_patches must still extract patches for v14+.
+
+    OWL patch() was introduced in v14 — guard must allow v14 and above.
+    """
+    import tree_sitter_javascript as tsjs
+    from tree_sitter import Language, Parser
+
+    JS_LANGUAGE = Language(tsjs.language())
+    parser = Parser(JS_LANGUAGE)
+
+    source_code = b"""
+/** @odoo-module **/
+import { patch } from "@web/core/utils/patch";
+patch(MyComp.prototype, "my_patch", { setup() {} });
+"""
+    tree = parser.parse(source_code)
+
+    v14_module = ModuleInfo(
+        name="some_v14_module", odoo_version="14.0",
+        repo="v14_repo", path=str(tmp_path), depends=[], version_raw="",
+    )
+    result = JSGraphResult(module=v14_module)
+
+    _extract_era3_patches(tree, source_code, v14_module, str(tmp_path / "test.js"), result)
+
+    assert len(result.patches) == 1, "v14 must produce JSPatchInfo nodes"
+    assert result.patches[0].era == "patch"
+    assert result.patches[0].target == "MyComp"
+    assert result.patches[0].patch_name == "my_patch"
+
+
+def test_era3_patches_extracted_for_v17(tmp_path):
+    """Regression: _extract_era3_patches must still extract patches for v17."""
+    _make_static_js(
+        tmp_path, "patch17.js",
+        '/** @odoo-module */\n'
+        'import { patch } from "@web/core/utils/patch";\n'
+        'patch(FormController.prototype, "form_ctrl_patch", { setup() {} });',
+    )
+    result = parse_module_graph(_module(tmp_path, version="17.0"))
+
+    assert len(result.patches) == 1, "v17 must produce JSPatchInfo nodes"
+    p = result.patches[0]
+    assert p.era == "patch"
+    assert p.target == "FormController"
+    assert p.patch_name == "form_ctrl_patch"

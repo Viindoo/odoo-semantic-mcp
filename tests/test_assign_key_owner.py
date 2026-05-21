@@ -69,17 +69,14 @@ CREATE TABLE IF NOT EXISTS email_verifications (
 );
 
 CREATE TABLE IF NOT EXISTS admin_audit_log (
-    id          BIGSERIAL PRIMARY KEY,
-    actor_id    INTEGER,
-    action      TEXT NOT NULL,
-    target_id   INTEGER,
-    detail_text TEXT,
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    id         BIGSERIAL PRIMARY KEY,
+    actor      TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    target     TEXT,
+    success    BOOLEAN NOT NULL DEFAULT TRUE,
+    detail     JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-
-ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS actor_id INTEGER;
-ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS target_id INTEGER;
-ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS detail_text TEXT;
 """
 
 _M9_TABLES = [

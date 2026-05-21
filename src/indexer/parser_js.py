@@ -3,7 +3,7 @@
 
 Era 1: Widget.extend({...})  — Odoo 8–12, no module system
 Era 2: odoo.define(...)       — Odoo 12–15
-Era 3: @odoo-module / OWL    — Odoo 16+
+Era 3: @odoo-module / OWL    — Odoo 14+ (primary from 16+)
 
 Each era produces JSChunk objects. Large files are sliding-windowed into
 ~2048-char chunks with 256-char overlap when no named entity is found.
@@ -381,6 +381,9 @@ def _extract_era3_patches(
     tree, source: bytes, module_info: ModuleInfo, filepath: str, result: JSGraphResult
 ) -> None:
     """era3: patch(MyComp.prototype, "name", {}) → JSPatchInfo(era='patch')."""
+    major_version = int(module_info.odoo_version.split(".")[0])
+    if major_version < 14:
+        return  # OWL patch() only exists in v14+
     for node in _walk(tree.root_node):
         if node.type != "call_expression":
             continue

@@ -85,20 +85,16 @@ CREATE INDEX IF NOT EXISTS idx_email_verif_user_id ON email_verifications(user_i
 CREATE INDEX IF NOT EXISTS idx_email_verif_token_hash ON email_verifications(token_hash);
 
 CREATE TABLE IF NOT EXISTS admin_audit_log (
-    id          BIGSERIAL PRIMARY KEY,
-    actor_id    INTEGER,
-    action      TEXT NOT NULL,
-    target_id   INTEGER,
-    detail_text TEXT,
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    id         BIGSERIAL PRIMARY KEY,
+    actor      TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    target     TEXT,
+    success    BOOLEAN NOT NULL DEFAULT TRUE,
+    detail     JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC);
-
--- Idempotent ALTER for pre-existing tables with different schemas
-ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS actor_id INTEGER;
-ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS target_id INTEGER;
-ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS detail_text TEXT;
 """
 
 

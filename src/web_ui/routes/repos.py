@@ -989,6 +989,68 @@ async def index_all(request: Request, body: IndexAllBody):
         return JSONResponse(_json_safe({"error": f"index-all failed: {e}"}), status_code=500)
 
 
+@router.get("/repos/{repo_id}/core-symbol-counts")
+async def core_symbol_counts(request: Request, repo_id: int):
+    """Return CoreSymbol counts per version for a single repo.
+
+    Queries Neo4j for all :CoreSymbol nodes grouped by ``odoo_version``.
+    The version(s) relevant to this repo come from its profile.  We return
+    counts for every version present in the graph so the UI can show zero-
+    vs-nonzero status badges.
+
+    JSON response: ``{"counts": {"17.0": 1234, "16.0": 0, ...}}``
+
+    Returns 404 when the repo is not found.
+    Returns 503 when Postgres / repo-lookup fails.
+    Returns 200 with an empty ``counts`` dict when Neo4j is unavailable or
+    the Neo4j query fails (graceful degradation - no 503 on graph errors).
+    """
+    try:
+        from src.db.pg import repo_store
+
+        repo = repo_store().get_repo_by_id(repo_id)
+    except Exception as e:
+        return JSONResponse(_json_safe({"error": str(e)}), status_code=503)
+
+    if repo is None:
+        return JSONResponse(_json_safe({"error": "repo not found"}), status_code=404)
+
+    odoo_version: str | None = repo.get("odoo_version")
+
+    try:
+        writer = _get_neo4j_writer()
+        if writer is None:
+            return JSONResponse(_json_safe({"counts": {}}))
+        try:
+            with writer.driver.session() as session:
+                if odoo_version:
+                    # Fast path: only count for the repo's own version
+                    result = session.run(
+                        "MATCH (cs:CoreSymbol {odoo_version: $v}) "
+                        "RETURN $v AS version, COUNT(cs) AS cnt",
+                        v=odoo_version,
+                    )
+                    counts = {row["version"]: row["cnt"] for row in result}
+                else:
+                    # Fallback: group all versions (repo has no version attached)
+                    result = session.run(
+                        "MATCH (cs:CoreSymbol) "
+                        "RETURN cs.odoo_version AS version, COUNT(cs) AS cnt "
+                        "ORDER BY toFloat(version)"
+                    )
+                    counts = {row["version"]: row["cnt"] for row in result}
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+    except Exception as e:
+        _logger.warning("core_symbol_counts Neo4j query failed for repo %s: %s", repo_id, e)
+        return JSONResponse(_json_safe({"counts": {}}))
+
+    return JSONResponse(_json_safe({"counts": counts}))
+
+
 # Job status and reset routes have been moved to src/web_ui/routes/jobs.py
 # (prefix="/api/jobs") per Phase 8 review — see that module for job_status
 # and reset_stuck_job handlers.

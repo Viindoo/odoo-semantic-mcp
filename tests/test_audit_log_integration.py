@@ -30,14 +30,12 @@ def _ensure_audit_log_table(conn) -> None:
                 target     TEXT,
                 success    BOOLEAN NOT NULL DEFAULT TRUE,
                 detail     JSONB,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                -- legacy W-UM columns (kept for rollback safety, deprecated per ADR-0021)
-                actor_id   INTEGER,
-                target_id  INTEGER,
-                detail_text TEXT
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
         """)
-        # Ensure canonical columns exist on pre-existing tables (idempotent)
+        # Ensure canonical columns exist on pre-existing tables (idempotent).
+        # Legacy W-UM columns (actor_id, target_id, detail_text) were dropped
+        # by migration m9_010_drop_audit_legacy_columns.sql (M10 WI-4).
         cur.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS actor TEXT")
         cur.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS action TEXT")
         cur.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS target TEXT")
