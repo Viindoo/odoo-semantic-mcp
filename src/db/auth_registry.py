@@ -757,7 +757,7 @@ class AuthStore:
 
         DEPRECATED (M9 W-AL): Use src.db.audit.write_audit_log() directly instead.
         This method is kept for backward compatibility only and will be removed
-        after M9 in a cleanup PR (per ADR-0021 §Legacy Column Deprecation).
+        in a future major release (per ADR-0021 §Legacy Column Deprecation).
 
         New callers should use:
             from src.db.audit import write_audit_log
@@ -771,26 +771,16 @@ class AuthStore:
         """
         try:
             with self._pool.checkout() as conn:
-                # actor_str: string fallback for schemas that have `actor TEXT NOT NULL`
-                # (from other M9 worktrees). Provides a value even when actor_id is None.
+                # Canonical-only insert (M10 WI-4: legacy actor_id/target_id/detail_text
+                # columns dropped by migration m10_001_drop_audit_legacy_columns.sql).
                 actor_str = str(actor_id) if actor_id is not None else "system"
+                target_str = str(target_id) if target_id is not None else None
                 self._pool.execute(
                     conn,
                     "INSERT INTO admin_audit_log"
-                    " (actor_id, action, target_id, detail_text, actor, success)"
-                    " VALUES (%s, %s, %s, %s, %s, %s)",
-                    (actor_id, action, target_id, detail, actor_str, True),
+                    " (actor, action, target, success)"
+                    " VALUES (%s, %s, %s, %s)",
+                    (actor_str, action, target_str, True),
                 )
         except Exception:
-            # Fall back to minimal insert if actor column doesn't exist (fresh schema)
-            try:
-                with self._pool.checkout() as conn:
-                    self._pool.execute(
-                        conn,
-                        "INSERT INTO admin_audit_log"
-                        " (actor_id, action, target_id, detail_text)"
-                        " VALUES (%s, %s, %s, %s)",
-                        (actor_id, action, target_id, detail),
-                    )
-            except Exception:
-                pass  # best-effort — audit failure must not break the main action
+            pass  # best-effort — audit failure must not break the main action
