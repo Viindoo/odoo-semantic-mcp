@@ -401,9 +401,11 @@ def _resolve_model(
             ORDER BY pname
         """, name=model_name, v=odoo_version).data()
 
+    # ADR-0023 §1.1: header = "{entity} (Odoo {version})", no decoration.
+    # from_module filter info goes as a branch line, not appended to header.
     lines = [f"{model_name} (Odoo {odoo_version})"]
     if from_module:
-        lines[0] += f" [from_module={from_module}]"
+        lines.append(f"├─ filter: from_module={from_module}")
     lines.append(f"├─ Defined in:     [{base['repo']}] {base['module_name']}")
 
     if parents:
@@ -2522,10 +2524,25 @@ def _list_fields(
     # Magic fields are rendered as a FIXED <builtin> prelude block that is OUTSIDE the
     # pagination/truncation logic for real fields.  The "Showing rows X–Y of N" line and
     # all start_index arithmetic operate ONLY on real (Neo4j) fields.
-    # Dedup: skip a magic field if the model already declares it in Neo4j.
+    # Dedup: skip a magic field if the model already declares it in Neo4j anywhere (model-
+    # scoped, not page-scoped — fields on page 2+ would not be in `rows` and would cause
+    # duplicates for e.g. display_name, write_date that appear late in the field list).
     magic_prelude_rows: list[dict] = []
     if start_index == 0 and module is None:
-        existing_names = {r["name"] for r in rows}
+        magic_names_list = list(MAGIC_FIELDS.keys())
+        with _get_driver().session() as _dedup_session:
+            _dedup_rec = _dedup_session.run(
+                """
+                MATCH (f:Field {model: $m, odoo_version: $v})
+                WHERE f.name IN $magic_names
+                  AND ($profile_name IS NULL OR $profile_name IN f.profile)
+                  AND f.module <> '__unresolved__'
+                RETURN collect(DISTINCT f.name) AS names
+                """,
+                m=model, v=odoo_version, magic_names=magic_names_list,
+                profile_name=profile_name,
+            ).single()
+        existing_names: set[str] = set(_dedup_rec["names"]) if _dedup_rec else set()
         magic_prelude_rows = [
             {
                 "name": fname,
@@ -2548,14 +2565,26 @@ def _list_fields(
         lines.extend(render_list_block(builtin_tagged))
 
     if total == 0:
-        # No real fields — emit "(none)" sentinel so callers can detect empty declared fields.
-        lines.append("├─ (none)")
-        # Wave 5: Next-step footer (empty result still gets a sensible hint).
-        next_line = format_next_step([
-            f"model_inspect(model='{model}', method='methods', odoo_version='{odoo_version}')"
-            " for behavior",
-        ])
-        lines.append(next_line)
+        # No real declared fields.
+        if magic_prelude_rows:
+            # Model has no declared fields but magic fields are present — the builtin block
+            # IS the content. ADR-0023 §1.6: "(none)" means "empty IS the answer"; when
+            # magic rows exist, the answer is not empty. Do NOT emit "(none)".
+            # The builtin block was already appended above. Just add the Next footer.
+            next_line = format_next_step([
+                f"model_inspect(model='{model}', method='methods', odoo_version='{odoo_version}')"
+                " for behavior",
+            ])
+            lines.append(next_line)
+        else:
+            # Truly no fields at all (all filtered out by kind/module/profile, or model unknown).
+            # Emit "(none)" sentinel so callers can detect completely empty result.
+            lines.append("├─ (none)")
+            next_line = format_next_step([
+                f"model_inspect(model='{model}', method='methods', odoo_version='{odoo_version}')"
+                " for behavior",
+            ])
+            lines.append(next_line)
         return "\n".join(lines)
 
     # Mint opaque refs for real (Neo4j) rows only.
@@ -4970,6 +4999,28 @@ def _resolve_stylesheet(
             ]
         return "\n".join(lines)
 
+    # I5: Batch-query all :IMPORTS edges in ONE session before the render loop
+    # (avoids N+1 sessions — one session per row that had imp > 0).
+    # Pattern: UNWIND file paths → collect imports per source, return as map.
+    fps_with_imports = [r["file_path"] for r in rows if (r["import_count"] or 0) > 0]
+    imports_by_fp: dict[str, list[dict]] = {}
+    if fps_with_imports:
+        with _get_driver().session() as session:
+            batch_rows = session.run(
+                """
+                UNWIND $fps AS fp
+                MATCH (src:Stylesheet {file_path: fp, module: $mod, odoo_version: $v})
+                      -[:IMPORTS]->(tgt:Stylesheet)
+                RETURN fp, tgt.file_path AS import_path, tgt.module AS import_module
+                ORDER BY fp ASC, tgt.file_path ASC
+                """,
+                fps=fps_with_imports, mod=module, v=odoo_version,
+            ).data()
+        for br in batch_rows:
+            imports_by_fp.setdefault(br["fp"], []).append(
+                {"import_path": br["import_path"], "import_module": br["import_module"]}
+            )
+
     header = f"resolve_stylesheet({module!r}, {odoo_version!r})"
     lines = [header, f"├─ Stylesheets: {len(rows)} file(s)"]
 
@@ -4990,36 +5041,36 @@ def _resolve_stylesheet(
         if imp:
             stats_parts.append(f"imports={imp}")
 
+        # I4: Use grammar-valid prefixes only (per ADR-0023 §1, tested by
+        # test_grammar_consistency_all_tools).  The import entries are rendered
+        # at the same depth as Stats (not deeper), so they always land on a
+        # valid allowed_start regardless of whether this is the last row:
+        #   non-last row: sub_prefix="│   " → import lines start with "│   │   ├─" (valid)
+        #   last row:     sub_prefix="    " → import lines start with "│       ├─" (valid)
+        # Nesting import entries one level deeper (│   {sub_prefix}    {imp_pfx}) would
+        # produce "│           ├─" for last-row which is NOT in allowed_starts.
         lines.append(f"│   {row_prefix} {fp}")
         sub_prefix = "    " if is_last_row else "│   "
-        lines.append(f"│   {sub_prefix}├─ Stats: {', '.join(stats_parts)}")
+        import_rows = imports_by_fp.get(fp, []) if imp > 0 else []
 
-        # Resolve BFS :IMPORTS chain for this stylesheet
-        if imp > 0:
-            with _get_driver().session() as session:
-                import_rows = session.run(
-                    """
-                    MATCH (src:Stylesheet {file_path: $fp, module: $mod, odoo_version: $v})
-                          -[:IMPORTS]->(tgt:Stylesheet)
-                    RETURN tgt.file_path AS import_path, tgt.module AS import_module
-                    ORDER BY tgt.file_path ASC
-                    """,
-                    fp=fp, mod=module, v=odoo_version,
-                ).data()
-            if import_rows:
-                lines.append(f"│   {sub_prefix}└─ Imports ({len(import_rows)}):")
-                for i_idx, ir in enumerate(import_rows):
-                    is_last_imp = i_idx == len(import_rows) - 1
-                    imp_prefix = "└─" if is_last_imp else "├─"
-                    lines.append(
-                        f"│   {sub_prefix}    {imp_prefix} {ir['import_path']}"
-                        f" [{ir['import_module']}]"
-                    )
-            else:
+        if import_rows:
+            lines.append(f"│   {sub_prefix}├─ Stats: {', '.join(stats_parts)}")
+            lines.append(f"│   {sub_prefix}├─ Imports ({len(import_rows)}):")
+            for i_idx, ir in enumerate(import_rows):
+                is_last_imp = i_idx == len(import_rows) - 1
+                imp_prefix = "└─" if is_last_imp else "├─"
                 lines.append(
-                    f"│   {sub_prefix}└─ Imports: edges not yet resolved (re-index to backfill)."
+                    f"│   {sub_prefix}{imp_prefix} {ir['import_path']}"
+                    f" [{ir['import_module']}]"
                 )
+        elif imp > 0:
+            # imp_count > 0 but batch returned no edges (edges not yet resolved)
+            lines.append(f"│   {sub_prefix}├─ Stats: {', '.join(stats_parts)}")
+            lines.append(
+                f"│   {sub_prefix}└─ Imports: edges not yet resolved (re-index to backfill)."
+            )
         else:
+            lines.append(f"│   {sub_prefix}├─ Stats: {', '.join(stats_parts)}")
             lines.append(f"│   {sub_prefix}└─ Imports: none")
 
     footer = hints_for("resolve_stylesheet", name=module, ver=odoo_version)
@@ -5060,7 +5111,7 @@ def _find_style_override(
             f"find_style_override: embedder unavailable — {type(e).__name__}: {e}\n"
             "Hint: check Ollama server is running and EMBEDDER_MODEL is loaded.\n"
             "Found 0 results\n"
-            f"{hints_for('find_style_override', name=selector_or_variable, ver=odoo_version)}"
+            f"{hints_for('find_style_override', module='', ver=odoo_version)}"
         )
 
     with driver.session() as session:
@@ -5072,6 +5123,7 @@ def _find_style_override(
         return (
             f"find_style_override: embedding failed — {type(e).__name__}: {e}\n"
             "Found 0 results\n"
+            f"{hints_for('find_style_override', module='', ver=odoo_version)}"
         )
 
     _pg_ctx = nullcontext(_pg_conn) if _pg_conn is not None else _checkout_pg()
@@ -5098,7 +5150,7 @@ def _find_style_override(
         f"Found {len(raw)} result(s)\n"
     )
     if not raw:
-        footer = hints_for("find_style_override", name=selector_or_variable, ver=odoo_version)
+        footer = hints_for("find_style_override", module="", ver=odoo_version)
         return header + (footer if footer else "")
 
     # For each hit, check :IMPORTS override chain — which modules re-declare
@@ -5141,7 +5193,9 @@ def _find_style_override(
         lines.append("   └" + "─" * 42)
         lines.append("")
 
-    footer = hints_for("find_style_override", name=selector_or_variable, ver=odoo_version)
+    # Pass top-result module so hints render useful resolve_stylesheet/describe_module calls.
+    top_module = raw[0]["module"] if raw else ""
+    footer = hints_for("find_style_override", module=top_module, ver=odoo_version)
     if footer:
         lines.append(footer)
     return "\n".join(lines)
@@ -5179,8 +5233,8 @@ def resolve_stylesheet(
           │   │   └─ Imports: none
           │   └─ /path/web/static/src/scss/variables.scss
           │       ├─ Stats: lang=scss, selectors=0, vars=15, mixins=3, imports=1
-          │       └─ Imports (1):
-          │           └─ /path/web/static/src/scss/base.scss [web]
+          │       ├─ Imports (1):
+          │       └─ /path/web/static/src/scss/base.scss [web]
           └─ Next: find_style_override(...) | describe_module(...)
 
     See also: odoo://{version}/stylesheet/{module}/{file_path*}

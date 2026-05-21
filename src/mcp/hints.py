@@ -3,7 +3,7 @@
 
 This module owns:
 
-1. ``NEXT_STEP_HINTS`` — 11-entry registry mapping each drill-down tool to its
+1. ``NEXT_STEP_HINTS`` — 13-entry registry mapping each drill-down tool to its
    recommended next-step templates. Templates contain ``{name}``, ``{ver}``,
    ``{module}``, ``{field}``, ``{method}``, ``{xmlid}`` placeholders rendered
    via ``str.format(**ctx)``.
@@ -80,15 +80,17 @@ NEXT_STEP_HINTS: dict[str, list[str]] = {
         " when pattern targets a method",
     ],
     # M10A stylesheet tools (ADR-0025, D5/D6)
+    # resolve_stylesheet: {name} = module name (caller passes name=module)
     "resolve_stylesheet": [
-        "find_style_override(selector_or_variable='{name}', odoo_version='{ver}')"
-        " to search a specific selector/variable",
+        "find_style_override(selector_or_variable='<a CSS selector or $variable>',"
+        " odoo_version='{ver}') to trace a specific override",
         "describe_module(name='{name}', odoo_version='{ver}') for full module overview",
     ],
+    # find_style_override: {module} = module of top result (caller passes module=<top module>)
     "find_style_override": [
-        "resolve_stylesheet(module='{name}', odoo_version='{ver}')"
+        "resolve_stylesheet(module='{module}', odoo_version='{ver}')"
         " to list all stylesheets in the matched module",
-        "describe_module(name='{name}', odoo_version='{ver}') for module context",
+        "describe_module(name='{module}', odoo_version='{ver}') for module context",
     ],
 }
 

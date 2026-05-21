@@ -22,7 +22,9 @@ import pytest
 
 from tests.conftest import TEST_VERSION
 
-pytestmark_neo4j = pytest.mark.neo4j
+# NOTE: This file intentionally has NO module-level pytestmark — it mixes
+# @pytest.mark.neo4j integration tests with pure-unit tests (no Docker).
+# Markers are applied per-test via @pytest.mark.neo4j decorators.
 
 
 # ---------------------------------------------------------------------------

@@ -1525,7 +1525,7 @@ def test_resolve_view_profile_filter_isolates(view_profile_tools):
 # ===========================================================================
 
 from tests.conftest import (  # noqa: E402,I001
-    seed_js_patches, seed_owl_components, seed_qweb_templates,
+    seed_js_patches, seed_owl_components, seed_qweb_templates, seed_stylesheets,
 )
 
 
@@ -1750,6 +1750,17 @@ def test_list_fields_happy(neo4j_driver):
 
 
 def test_list_fields_empty(neo4j_driver):
+    """Model with 0 declared fields (ghost.model) still shows the builtin magic block.
+
+    Changed in M10A D2: magic fields (id, display_name, create_uid, create_date,
+    write_uid, write_date) are always injected as a synthetic <builtin> block when
+    no module filter is active.  A model that has never been indexed will have 0
+    declared fields, but the magic block makes the output non-empty.
+    ADR-0023 §1.6: "(none)" means "empty IS the answer"; with magic rows present
+    the answer is NOT empty — so "(none)" is NOT emitted.  A truly-empty result
+    (all fields filtered out by kind/module/profile with no magic match) still
+    emits "(none)" — see test_list_fields_truly_empty_with_kind_filter below.
+    """
     _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
     try:
         srv = _import_server_module()
@@ -1757,9 +1768,39 @@ def test_list_fields_empty(neo4j_driver):
         assert out.startswith(
             f"Fields of ghost.model (Odoo {W6_LIST_FIELDS_VERSION})",
         )
-        assert "(none)" in out
-        # Empty result still emits a Next: hint per Wave 5.
+        # Magic block is present — no "(none)" when magic fields are shown.
+        assert "(none)" not in out
+        assert "<builtin>" in out, "Expected '<builtin>' marker (magic fields always shown)"
+        assert "id : integer" in out, "Magic field 'id' must be present"
+        # Empty declared fields still get a Next: hint per Wave 5.
         assert "└─ Next:" in out
+    finally:
+        _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
+
+
+def test_list_fields_truly_empty_with_kind_filter(neo4j_driver):
+    """When kind filter matches no real field AND no magic field, emit '(none)'.
+
+    Use kind='monetary' on ghost.model — ghost.model has 0 real fields, and
+    no magic field has ttype='monetary', so magic_prelude_rows is also empty.
+    This is the truly-empty case where ADR-0023 §1.6 '(none)' IS the answer.
+    """
+    _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
+    try:
+        srv = _import_server_module()
+        # MAGIC_FIELDS: id=integer, display_name=char, create_uid/write_uid=many2one,
+        # create_date/write_date=datetime — none are 'monetary'.
+        # ghost.model has 0 real fields. So total==0 AND magic_prelude_rows is [].
+        out = srv._list_fields("ghost.model", W6_LIST_FIELDS_VERSION, kind="monetary")
+        assert out.startswith(
+            f"Fields of ghost.model (Odoo {W6_LIST_FIELDS_VERSION})",
+        )
+        # Truly empty — "(none)" is the correct sentinel.
+        assert "(none)" in out
+        # Next: hint still emitted even for truly-empty result.
+        assert "└─ Next:" in out
+        # Magic block must NOT appear (kind filter excluded all magic fields).
+        assert "<builtin>" not in out
     finally:
         _cleanup_version(neo4j_driver, W6_LIST_FIELDS_VERSION)
 
@@ -2410,6 +2451,38 @@ def grammar_seed(neo4j_driver):
         neo4j_driver, module="sale", odoo_version=W6_GRAMMAR_VERSION,
         patches=[{"target": "ListController",
                   "patch_name": "x", "era": "patch"}],
+    )
+    # Seed :Stylesheet nodes with an :IMPORTS edge so resolve_stylesheet exercises
+    # the import-chain branch in test_grammar_consistency_all_tools.
+    # Two files: main.scss (imports variables.scss) and variables.scss.
+    # This ensures both the "has imports" branch and "imports: none" branch are hit
+    # within a single tool invocation against grammar_seed data.
+    seed_stylesheets(
+        neo4j_driver, module="sale", odoo_version=W6_GRAMMAR_VERSION,
+        stylesheets=[
+            {
+                "file_path": "/tmp/sale/static/src/scss/main.scss",
+                "language": "scss",
+                "selector_count": 5,
+                "variable_count": 0,
+                "import_count": 1,
+                "mixin_count": 0,
+            },
+            {
+                "file_path": "/tmp/sale/static/src/scss/variables.scss",
+                "language": "scss",
+                "selector_count": 0,
+                "variable_count": 3,
+                "import_count": 0,
+                "mixin_count": 0,
+            },
+        ],
+        imports=[
+            (
+                "/tmp/sale/static/src/scss/main.scss",
+                "/tmp/sale/static/src/scss/variables.scss",
+            ),
+        ],
     )
     yield W6_GRAMMAR_VERSION
     _cleanup_version(neo4j_driver, W6_GRAMMAR_VERSION)
