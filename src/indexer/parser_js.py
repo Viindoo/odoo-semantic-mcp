@@ -381,6 +381,9 @@ def _extract_era3_patches(
     tree, source: bytes, module_info: ModuleInfo, filepath: str, result: JSGraphResult
 ) -> None:
     """era3: patch(MyComp.prototype, "name", {}) → JSPatchInfo(era='patch')."""
+    major_version = int(module_info.odoo_version.split(".")[0])
+    if major_version < 14:
+        return  # OWL patch() only exists in v14+
     for node in _walk(tree.root_node):
         if node.type != "call_expression":
             continue
