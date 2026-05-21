@@ -23,11 +23,13 @@ DB insert is handled exclusively here.
 import asyncio
 import logging
 import time
+from collections.abc import Sequence
 
 import mcp.types as mt
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.middleware import CallNext, ToolResult
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 
 _logger = logging.getLogger(__name__)
 
@@ -91,6 +93,35 @@ class UsageLogMiddleware(Middleware):
         task.add_done_callback(_BG_TASKS.discard)
 
         return result
+
+    async def on_read_resource(
+        self,
+        context: MiddlewareContext[mt.ReadResourceRequestParams],
+        call_next: CallNext[mt.ReadResourceRequestParams, Sequence[ReadResourceContents]],
+    ) -> Sequence[ReadResourceContents]:
+        """Hook fired for every ``resources/read`` JSON-RPC request.
+
+        Propagates api_key_id into the thread-local so the session-context
+        resolver (_get_api_key_id) returns the real tenant key during resource
+        reads, preventing the sticky-session bypass where resource reads always
+        resolved to the 'default' sentinel.
+
+        Usage-log insert is intentionally omitted here — resource reads are
+        typically bookmark-stable content fetches and are already cached; the
+        on_call_tool hook covers tool-call accounting.
+        """
+        api_key_id: str | None = None
+        try:
+            req = get_http_request()
+            api_key_id = getattr(req.state, "api_key_id", None)
+        except Exception:
+            pass  # no active HTTP request (e.g. stdio transport) — fine
+
+        _set_server_api_key(api_key_id)
+        try:
+            return await call_next(context)
+        finally:
+            _set_server_api_key(None)  # clear to avoid cross-request leakage
 
 
 def _set_server_api_key(api_key_id: str | None) -> None:

@@ -2,9 +2,7 @@
 # src/mcp/server.py
 import math
 import os
-import re
 import threading
-import warnings
 from contextlib import asynccontextmanager, contextmanager, nullcontext
 
 from fastmcp import FastMCP
@@ -54,7 +52,7 @@ from src.mcp.hints import (  # noqa: F401  (hints_for is re-exported for externa
     hints_for,
 )
 from src.mcp.inspect import _entity_lookup, _model_inspect, _module_inspect
-from src.mcp.refs import RefError, mint_refs, resolve_ref
+from src.mcp.refs import mint_refs
 from src.mcp.resources import register_resources
 from src.mcp.tool_log_middleware import UsageLogMiddleware as _UsageLogMiddleware
 from src.mcp.tree_builder import render_list_block
@@ -144,44 +142,6 @@ _embedder_instance = None
 _version_checked = False
 _init_lock = threading.Lock()  # guards _driver + _embedder_instance lazy init
 
-# ---------------------------------------------------------------------------
-# Dual-mode ref helpers (WI-C3) — resolve_ref or canonical parse
-# ---------------------------------------------------------------------------
-
-# Regex for opaque ref IDs minted by list_* tools: f1, m12, v3, x99, p5.
-# Max length ≤ 6 chars (1 prefix + up to 5 digits) to avoid false positives
-# on canonical names that happen to start with f/m/v/x/p.
-_REF_PATTERN = re.compile(r"^[fmvxp]\d{1,5}$")
-
-
-# ---------------------------------------------------------------------------
-# Deprecation banner helper (WI-D4) — for 10 legacy tools redirecting to
-# supersets (model_inspect, module_inspect, entity_lookup)
-# ---------------------------------------------------------------------------
-
-
-def _deprecation_banner(new_tool: str, args: str) -> str:
-    """Return a deprecation banner for legacy tools.
-
-    Args:
-        new_tool: Name of the new superset tool (e.g. 'model_inspect').
-        args: Example arguments (e.g. "model='X', method='summary'").
-
-    Returns:
-        A banner string formatted as:
-            "DEPRECATED: use <new_tool>(<args>) instead. Will be removed in
-             v0.6 — see ADR-0028.\n\n"
-    """
-    return (
-        f"DEPRECATED: use {new_tool}({args}) instead. Will be removed in "
-        "v0.6 — see ADR-0028.\n\n"
-    )
-
-
-def _looks_like_ref(s: str) -> bool:
-    """Return True when *s* looks like a ref minted by list_* tools (e.g. 'f12')."""
-    return bool(_REF_PATTERN.match(s))
-
 
 def _get_api_key_id() -> str:
     """Return the API key ID for the current sync context.
@@ -200,32 +160,6 @@ def _get_api_key_id() -> str:
 # Thread-local storage for API key ID — populated by middleware when available.
 _api_key_id_local = threading.local()
 
-
-_STALE_REF_RECOVERY: dict[str, str] = {
-    "model": (
-        "describe_module(name=<module>, odoo_version='X')"
-        " or find_examples(query='model name')"
-    ),
-    "field": "list_fields(model='X', odoo_version='Y') to re-mint field refs",
-    "method": "list_methods(model='X', odoo_version='Y') to re-mint method refs",
-    "view": "list_views(model='X', odoo_version='Y') to re-mint view refs",
-}
-
-
-def _format_stale_ref_error(entity: str, ref: str, err: RefError) -> str:
-    """Return a friendly error string for a stale or unknown ref.
-
-    The error is returned as a tree-formatted string matching the not-found
-    convention of other resolve_* tools (plain text, no exception raised).
-    """
-    hint = (
-        err.recovery_hint
-        or _STALE_REF_RECOVERY.get(entity, f"Re-run the list_{entity}s(...) call that minted it.")
-    )
-    return (
-        f"resolve_{entity}: Ref {ref!r} is unknown or expired.\n"
-        f"└─ Recovery: {hint}"
-    )
 
 # find_examples rerank coefficients — extracted so calibration harness can
 # monkey-patch them. See _find_examples + tests/test_calibration_eval.py.
@@ -883,381 +817,6 @@ def _find_examples(
         " for curated patterns",
     ]))
     return "\n".join(lines)
-
-
-@mcp.tool(output_schema=ResolveModelOutput.model_json_schema(), **READONLY_TOOL_KWARGS)
-def resolve_model(
-    target: str | None = None,
-    model_name: str | None = None,
-    odoo_version: str = "auto",
-    profile_name: str | None = None,
-) -> ToolResult:
-    """Return full inheritance chain, field count, and method count for an Odoo model.
-
-    TRIGGER when: "show inheritance chain of sale.order", "what fields does
-    account.move have", "which modules extend res.partner", "liệt kê các field
-    của model X", "module nào extend model Y"
-    PREFER over: asking LLM from training data — returns real indexed data
-    SKIP when: user wants detail on one field → use resolve_field;
-    or method chain → use resolve_method
-    SKIP when (NEW): you want multi-faceted model inspection →
-        use model_inspect(model='...', method='summary') (M11+)
-
-    Args:
-        target: Opaque ref ID (e.g. 'm5') or canonical model name
-            (e.g. 'sale.order'). Preferred over legacy model_name.
-        model_name: DEPRECATED — use target=.
-        odoo_version: e.g. '17.0'. Default 'auto'.
-        profile_name: Optional profile filter.
-
-    Returns:
-        Tree: Defined in, Inherits from, Extended by, Fields count, Methods count.
-
-    Example:
-        resolve_model("sale.order", "17.0")
-        → Defined in: [odoo] sale
-          ├─ Extended by: [odoo] viin_sale, [odoo] to_sale_custom
-          ├─ Fields: 47
-          └─ Methods: 23
-
-    See also: odoo://{version}/model/{name}
-    """
-    # --- dual-mode dispatch ---
-    if target is not None and model_name is not None:
-        warnings.warn(
-            "resolve_model: ignoring legacy model_name=; target= takes precedence.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-    if model_name is not None and target is None:
-        warnings.warn(
-            "resolve_model: model_name= is deprecated; use target='ref' or"
-            " target='sale.order' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    effective_model: str | None = None
-
-    if target is not None:
-        if _looks_like_ref(target):
-            try:
-                canonical = resolve_ref(target, _get_api_key_id())
-                effective_model = canonical.get("model") or canonical.get("name")
-            except RefError as err:
-                err_text = _format_stale_ref_error("model", target, err)
-                return ToolResult(
-                    content=[TextContent(type="text", text=err_text)],
-                    structured_content=None,
-                )
-        else:
-            # canonical name: "sale.order"
-            effective_model = target
-    elif model_name is not None:
-        effective_model = model_name
-
-    if not effective_model:
-        err_text = (
-            "resolve_model: target= or model_name= required.\n"
-            "└─ Example: resolve_model(target='sale.order', odoo_version='17.0')"
-        )
-        return ToolResult(
-            content=[TextContent(type="text", text=err_text)],
-            structured_content=None,
-        )
-
-    text = _resolve_model(effective_model, odoo_version, profile_name)
-    structured = _resolve_model_structured(effective_model, odoo_version, profile_name)
-    text = _deprecation_banner("model_inspect", "model='...', method='summary'") + text
-    return ToolResult(
-        content=[TextContent(type="text", text=text)],
-        structured_content=structured.model_dump() if structured is not None else None,
-    )
-
-
-@mcp.tool(output_schema=ResolveFieldOutput.model_json_schema(), **READONLY_TOOL_KWARGS)
-def resolve_field(
-    target: str | None = None,
-    model_name: str | None = None,
-    field_name: str | None = None,
-    odoo_version: str = "auto",
-    profile_name: str | None = None,
-) -> ToolResult:
-    """Return type, compute/related metadata, and declaring modules for one field.
-
-    TRIGGER when: "what type is amount_total", "is field X computed",
-    "field X có related không", "kiểu dữ liệu của field X là gì"
-    PREFER over: resolve_model for detail
-    SKIP when: user wants all fields → use list_fields or model_inspect
-
-    Args:
-        target: Opaque ref ID (e.g. 'f12') or canonical dotted path
-            (e.g. 'sale.order.amount_total'). Preferred over legacy args.
-        model_name: DEPRECATED — use target=.
-        field_name: DEPRECATED — use target=.
-        odoo_version: e.g. '17.0'. Default 'auto'.
-        profile_name: Optional profile filter.
-
-    Returns:
-        Tree: Type, Computed, Stored, Required, Related, Declared in modules.
-
-    Example:
-        resolve_field("sale.order.amount_total", "17.0")
-        → Type: monetary | Computed: Yes | Stored: Yes | Required: No
-          └─ Declared in: [odoo] sale
-
-    See also: odoo://{version}/field/{model}/{field}
-    """
-    # --- dual-mode dispatch ---
-    has_legacy = model_name is not None or field_name is not None
-    if target is not None and has_legacy:
-        warnings.warn(
-            "resolve_field: ignoring legacy model_name=/field_name=; target= takes precedence.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-    if has_legacy and target is None:
-        warnings.warn(
-            "resolve_field: model_name=/field_name= are deprecated; use"
-            " target='ref_id' or target='model.field_name' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    effective_model: str | None = model_name
-    effective_field: str | None = field_name
-
-    if target is not None:
-        if _looks_like_ref(target):
-            try:
-                canonical = resolve_ref(target, _get_api_key_id())
-                effective_model = canonical.get("model")
-                effective_field = canonical.get("field_name") or canonical.get("name")
-            except RefError as err:
-                err_text = _format_stale_ref_error("field", target, err)
-                return ToolResult(
-                    content=[TextContent(type="text", text=err_text)],
-                    structured_content=None,
-                )
-        else:
-            # canonical: "sale.order.amount_total" — split on last dot boundary
-            # to separate model (may contain dots) from field name.
-            parts = target.rsplit(".", 1)
-            if len(parts) == 2:
-                effective_model, effective_field = parts[0], parts[1]
-            else:
-                # No dot — treat whole string as field name, model unknown.
-                effective_field = target
-
-    if not (effective_model and effective_field):
-        err_text = (
-            "resolve_field: target= or model_name= + field_name= required.\n"
-            "└─ Example: resolve_field(target='sale.order.amount_total')"
-            " or resolve_field(model_name='sale.order', field_name='amount_total')"
-        )
-        return ToolResult(
-            content=[TextContent(type="text", text=err_text)],
-            structured_content=None,
-        )
-
-    text = _resolve_field(effective_model, effective_field, odoo_version, profile_name)
-    structured = _resolve_field_structured(
-        effective_model, effective_field, odoo_version, profile_name
-    )
-    text = _deprecation_banner(
-        "model_inspect",
-        "model='...', method='field', field='...'"
-    ) + text
-    return ToolResult(
-        content=[TextContent(type="text", text=text)],
-        structured_content=structured.model_dump() if structured is not None else None,
-    )
-
-
-@mcp.tool(output_schema=ResolveMethodOutput.model_json_schema(), **READONLY_TOOL_KWARGS)
-def resolve_method(
-    target: str | None = None,
-    model_name: str | None = None,
-    method_name: str | None = None,
-    odoo_version: str = "auto",
-    profile_name: str | None = None,
-) -> ToolResult:
-    """Return the full override chain of a method, ordered base to top.
-
-    TRIGGER when: "show override chain of action_confirm", "where is method X",
-    "method nào super() lên model kia", "ai override method X"
-    PREFER over: grep — returns full chain with super() linkage
-    SKIP when: user wants all methods → use list_methods or model_inspect
-
-    Args:
-        target: Opaque ref ID (e.g. 'm3') or canonical dotted path
-            (e.g. 'sale.order.action_confirm'). Preferred over legacy args.
-        model_name: DEPRECATED — use target=.
-        method_name: DEPRECATED — use target=.
-        odoo_version: e.g. '17.0'. Default 'auto'.
-        profile_name: Optional profile filter.
-
-    Returns:
-        Tree: Override chain base→top with super() status and decorators.
-
-    Example:
-        resolve_method("sale.order.action_confirm", "17.0")
-        → Override chain (3):
-            ├─ [odoo] sale — ✗ no super()
-            ├─ [odoo] viin_sale — ✓ super()
-            └─ [odoo] to_sale_workflow — ✓ super()
-
-    See also: odoo://{version}/method/{model}/{method}
-    """
-    # --- dual-mode dispatch ---
-    has_legacy = model_name is not None or method_name is not None
-    if target is not None and has_legacy:
-        warnings.warn(
-            "resolve_method: ignoring legacy model_name=/method_name=; target= takes precedence.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-    if has_legacy and target is None:
-        warnings.warn(
-            "resolve_method: model_name=/method_name= are deprecated; use"
-            " target='ref_id' or target='model.method_name' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    effective_model: str | None = model_name
-    effective_method: str | None = method_name
-
-    if target is not None:
-        if _looks_like_ref(target):
-            try:
-                canonical = resolve_ref(target, _get_api_key_id())
-                effective_model = canonical.get("model")
-                effective_method = canonical.get("method_name") or canonical.get("name")
-            except RefError as err:
-                err_text = _format_stale_ref_error("method", target, err)
-                return ToolResult(
-                    content=[TextContent(type="text", text=err_text)],
-                    structured_content=None,
-                )
-        else:
-            # canonical: "sale.order.action_confirm" — rsplit on last dot
-            parts = target.rsplit(".", 1)
-            if len(parts) == 2:
-                effective_model, effective_method = parts[0], parts[1]
-            else:
-                effective_method = target
-
-    if not (effective_model and effective_method):
-        err_text = (
-            "resolve_method: target= or model_name= + method_name= required.\n"
-            "└─ Example: resolve_method(target='sale.order.action_confirm')"
-            " or resolve_method(model_name='sale.order', method_name='action_confirm')"
-        )
-        return ToolResult(
-            content=[TextContent(type="text", text=err_text)],
-            structured_content=None,
-        )
-
-    text = _resolve_method(effective_model, effective_method, odoo_version, profile_name)
-    structured = _resolve_method_structured(
-        effective_model, effective_method, odoo_version, profile_name
-    )
-    text = _deprecation_banner(
-        "model_inspect",
-        "model='...', method='method', method_name='...'"
-    ) + text
-    return ToolResult(
-        content=[TextContent(type="text", text=text)],
-        structured_content=structured.model_dump() if structured is not None else None,
-    )
-
-
-@mcp.tool(output_schema=ResolveViewOutput.model_json_schema(), **READONLY_TOOL_KWARGS)
-def resolve_view(
-    target: str | None = None,
-    xmlid: str | None = None,
-    odoo_version: str = "auto",
-    profile_name: str | None = None,
-) -> ToolResult:
-    """Return view inheritance chain and XPath modifications from all extension modules.
-
-    TRIGGER when: "show xpath overrides for sale.order form", "which modules
-    modify view X", "view bị override bởi module nào", "XPath chain của view X"
-    PREFER over: searching XML files — aggregates cross-module XPath
-    overrides into one merged skeleton
-    SKIP when: user wants Python logic → resolve_method; field info → resolve_field
-
-    Args:
-        target: Opaque ref ID (e.g. 'v3') or canonical XML ID
-            (e.g. 'sale.view_order_form'). Preferred over legacy xmlid.
-        xmlid: DEPRECATED — use target=.
-        odoo_version: e.g. '17.0'. Default 'auto'.
-        profile_name: Optional profile filter.
-
-    Returns:
-        Tree: Type, model, defining module, parent view (if extension),
-        XPath ops, extending views per module.
-
-    Example:
-        resolve_view("sale.view_order_form", "17.0")
-        → Type: form | Model: sale.order | Module: [odoo] sale
-          └─ Extended by (2):
-              ├─ [odoo] viin_sale
-              └─ [odoo] to_sale_custom
-
-    See also: odoo://{version}/view/{xmlid}
-    """
-    # --- dual-mode dispatch ---
-    if target is not None and xmlid is not None:
-        warnings.warn(
-            "resolve_view: ignoring legacy xmlid=; target= takes precedence.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-    if xmlid is not None and target is None:
-        warnings.warn(
-            "resolve_view: xmlid= is deprecated; use target='ref' or"
-            " target='sale.view_order_form' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    effective_xmlid: str | None = xmlid
-
-    if target is not None:
-        if _looks_like_ref(target):
-            try:
-                canonical = resolve_ref(target, _get_api_key_id())
-                effective_xmlid = canonical.get("xmlid")
-            except RefError as err:
-                err_text = _format_stale_ref_error("view", target, err)
-                return ToolResult(
-                    content=[TextContent(type="text", text=err_text)],
-                    structured_content=None,
-                )
-        else:
-            # canonical xmlid: "sale.view_order_form"
-            effective_xmlid = target
-
-    if not effective_xmlid:
-        err_text = (
-            "resolve_view: target= or xmlid= required.\n"
-            "└─ Example: resolve_view(target='sale.view_order_form')"
-            " or resolve_view(xmlid='sale.view_order_form')"
-        )
-        return ToolResult(
-            content=[TextContent(type="text", text=err_text)],
-            structured_content=None,
-        )
-
-    text = _resolve_view(effective_xmlid, odoo_version, profile_name)
-    structured = _resolve_view_structured(effective_xmlid, odoo_version, profile_name)
-    text = _deprecation_banner("entity_lookup", "kind='view', xmlid='...'") + text
-    return ToolResult(
-        content=[TextContent(type="text", text=text)],
-        structured_content=structured.model_dump() if structured is not None else None,
-    )
 
 
 @mcp.tool(**READONLY_TOOL_KWARGS)
@@ -4750,309 +4309,6 @@ def describe_module(
     )
 
 
-@mcp.tool(output_schema=ListFieldsOutput.model_json_schema(), **READONLY_TOOL_KWARGS)
-def list_fields(
-    model: str,
-    odoo_version: str = "auto",
-    module: str | None = None,
-    kind: str | None = None,
-    profile_name: str | None = None,
-    limit: int = 200,
-    start_index: int = 0,
-) -> ToolResult:
-    """Enumerate fields declared on an Odoo model, grouped by module.
-
-    TRIGGER when: "list all fields of sale.order", "show fields on account.move",
-    "what fields does res.partner have", "liệt kê field của model X",
-    "tất cả field trên sale.order"
-    PREFER over: resolve_model — returns full enumerated list with type per row
-    SKIP when: caller wants one field's detail → resolve_field. When asking
-    "how many fields", resolve_model is cheaper.
-
-    Args:
-        model: Odoo model dotted name (e.g. 'sale.order').
-        odoo_version: '17.0' / '18.0' / 'auto'.
-        module: Optional module filter.
-        kind: Optional ttype filter (e.g. 'monetary').
-        profile_name: Optional profile filter.
-        limit: Cypher LIMIT (default 200). Render cap is 50.
-        start_index: Pagination cursor (default 0).
-
-    Returns:
-        Tree: header + per-module subtree of `[ref=fN] name : ttype`.
-
-    Example:
-        list_fields("sale.order", "17.0", module="sale")
-        → [odoo] sale
-            ├─ [ref=f1] name : char
-            └─ [ref=f2] amount_total : monetary
-
-    See also: odoo://{version}/field/{model}/{field}
-    """
-    text = _list_fields(
-        model, odoo_version, module, kind, profile_name, limit, start_index,
-        api_key_id=_get_api_key_id(),
-    )
-    structured = _list_fields_structured(
-        model, odoo_version, module, kind, profile_name, limit, start_index,
-        api_key_id=_get_api_key_id(),
-    )
-    text = _deprecation_banner("model_inspect", "model='...', method='fields'") + text
-    return ToolResult(
-        content=[TextContent(type="text", text=text)],
-        structured_content=structured.model_dump() if structured is not None else None,
-    )
-
-
-@mcp.tool(output_schema=ListMethodsOutput.model_json_schema(), **READONLY_TOOL_KWARGS)
-def list_methods(
-    model: str,
-    odoo_version: str = "auto",
-    module: str | None = None,
-    profile_name: str | None = None,
-    limit: int = 200,
-    start_index: int = 0,
-) -> ToolResult:
-    """Enumerate methods on an Odoo model, grouped by module.
-
-    Methods overridden across ≥2 modules are marked with `(*)`.
-
-    TRIGGER when: "list methods of sale.order", "all methods on res.partner",
-    "what behavior does account.move have", "method nào trên model X",
-    "tất cả method của sale.order"
-    PREFER over: resolve_method — enumerates every method on the model
-    SKIP when: caller wants one method's override chain → resolve_method.
-    For best override point → use find_override_point.
-
-    Args:
-        model: Odoo model dotted name.
-        odoo_version: '17.0' / '18.0' / 'auto'.
-        module: Optional module filter.
-        profile_name: Optional profile filter.
-        limit: Cypher LIMIT (default 200). Render cap is 20.
-        start_index: Pagination cursor (default 0).
-
-    Returns:
-        Tree: header + per-module subtree of `[ref=mN] name[(*)] : kind`.
-
-    Example:
-        list_methods("sale.order", "17.0")
-        → [odoo] sale
-            ├─ [ref=m1] action_confirm(*) : action
-            └─ [ref=m2] _compute_amount : compute
-
-    See also: odoo://{version}/method/{model}/{method}
-    """
-    text = _list_methods(
-        model, odoo_version, module, profile_name, limit, start_index,
-        api_key_id=_get_api_key_id(),
-    )
-    structured = _list_methods_structured(
-        model, odoo_version, module, profile_name, limit, start_index,
-        api_key_id=_get_api_key_id(),
-    )
-    text = _deprecation_banner("model_inspect", "model='...', method='methods'") + text
-    return ToolResult(
-        content=[TextContent(type="text", text=text)],
-        structured_content=structured.model_dump() if structured is not None else None,
-    )
-
-
-@mcp.tool(**READONLY_TOOL_KWARGS)
-def list_views(
-    model: str,
-    odoo_version: str = "auto",
-    view_type: str | None = None,
-    profile_name: str | None = None,
-    limit: int = 200,
-    start_index: int = 0,
-) -> str:
-    """Enumerate XML views targeting an Odoo model, grouped by module.
-
-    TRIGGER when: "list views of sale.order", "what views are defined for
-    res.partner", "all form views on account.move", "view nào của model X",
-    "tất cả form/tree view trên sale.order", "kanban views on hr.employee"
-    PREFER over: resolve_view — that tool drills into one xmlid;
-    list_views enumerates every view targeting the model.
-    SKIP when: caller wants one view's xpath chain → use resolve_view. Use
-    list_qweb_templates when the caller wants QWeb (not ir.ui.view) records.
-    SKIP when (NEW): you want view enumeration with model/module context in one tool →
-        prefer model_inspect(model='...', method='views') or
-        module_inspect(name='...', method='views') (M11 superset, v0.5+)
-
-    Args:
-        model: Odoo model dotted name (e.g. 'sale.order').
-        odoo_version: '17.0' / '18.0' / 'auto'.
-        view_type: Optional filter (form/tree/kanban/search/...).
-        profile_name: Optional profile filter.
-        limit: Cypher LIMIT (default 200). Render cap is 20.
-        start_index: Zero-based pagination cursor (default 0 = first page).
-
-    Returns:
-        Tree text: header + per-module subtree of `[ref=vN] xmlid : type` rows.
-
-    Example:
-        list_views("sale.order", "17.0", view_type="form")
-        → Views of sale.order (Odoo 17.0)
-          ├─ [odoo] sale
-          │   └─ [ref=v1] sale.view_order_form : form
-    """
-    text = _list_views(
-        model, odoo_version, view_type, profile_name, limit, start_index,
-        api_key_id=_get_api_key_id(),
-    )
-    text = _deprecation_banner("model_inspect", "model='...', method='views'") + text
-    return text
-
-
-@mcp.tool(**READONLY_TOOL_KWARGS)
-def list_owl_components(
-    module: str,
-    odoo_version: str = "auto",
-    bound_model: str | None = None,
-    profile_name: str | None = None,
-    limit: int = 200,
-    start_index: int = 0,
-) -> str:
-    """Enumerate OWL components declared in a module (Odoo v14+).
-
-    Era-aware: empty + warning for v8-v13 (Widget era, no OWL).
-    bound_model filter is heuristic — may miss dynamic resModel bindings.
-
-    TRIGGER when: "list OWL components in sale_management", "what OWL
-    components does website_sale define", "OWL components for sale.order",
-    "OWL component nào trong module X", "tất cả OWL component bound to model Y"
-    PREFER over: find_examples — that tool returns code snippets;
-    list_owl_components gives the structured component inventory.
-    SKIP when: caller wants legacy Widget (v8-v13) → use list_js_patches
-    with era='era1'. Use list_qweb_templates for QWeb templates.
-    SKIP when (NEW): prefer module_inspect(name='...', method='owl')
-        for OWL enumeration with module context in one call (M11+)
-
-    Args:
-        module: Module name to search within.
-        odoo_version: '17.0' / '18.0' / 'auto'.
-        bound_model: Optional filter — components matching this model name.
-        profile_name: Optional profile filter.
-        limit: Cypher LIMIT (default 200). Render cap is 20.
-        start_index: Zero-based pagination cursor (default 0).
-
-    Returns:
-        Tree text: header + `[ref=fN] component_name : bound_model` rows.
-
-    Example:
-        list_owl_components("sale_management", "17.0")
-        → OWL components of sale_management (Odoo 17.0)
-          ├─ [ref=f1] SaleOrderKanban : sale.order
-          └─ [ref=f2] SaleSidebar : (unbound)
-    """
-    text = _list_owl_components(
-        module, odoo_version, bound_model, profile_name, limit, start_index,
-        api_key_id=_get_api_key_id(),
-    )
-    text = _deprecation_banner("module_inspect", "name='...', method='owl'") + text
-    return text
-
-
-@mcp.tool(**READONLY_TOOL_KWARGS)
-def list_qweb_templates(
-    module: str,
-    odoo_version: str = "auto",
-    profile_name: str | None = None,
-    limit: int = 200,
-    start_index: int = 0,
-) -> str:
-    """Enumerate QWeb templates declared in a module.
-
-    TRIGGER when: "list QWeb templates in website_sale", "what QWeb
-    templates does module X define", "QWeb template nào trong module Y",
-    "all t-name templates in module Z", "show me QWeb inheritance for
-    module W"
-    PREFER over: find_examples — that tool returns rendered snippets;
-    list_qweb_templates gives the inheritance-aware inventory.
-    SKIP when: caller wants OWL components (v15+ JS classes) → use
-    list_owl_components. Use resolve_view when the template IS an
-    ir.ui.view (not a pure QWeb-portal template).
-    SKIP when (NEW): you want QWeb template enumeration with module context in one tool →
-        prefer module_inspect(name='...', method='qweb') (M11 superset, v0.5+)
-
-    Args:
-        module: Module name to search within.
-        odoo_version: '17.0' / '18.0' / 'auto'.
-        profile_name: Optional profile filter.
-        limit: Cypher LIMIT (default 200). Render cap is 20.
-        start_index: Zero-based pagination cursor (default 0 = first page).
-
-    Returns:
-        Tree text: header + `[ref=vN] xmlid : t-inherit=<parent or (root)>` rows.
-
-    Example:
-        list_qweb_templates("website_sale", "17.0")
-        → QWeb templates of website_sale (Odoo 17.0)
-          ├─ [ref=v1] website_sale.product : t-inherit=(root)
-          └─ [ref=v2] website_sale.cart_lines : t-inherit=website_sale.cart
-    """
-    text = _list_qweb_templates(
-        module, odoo_version, profile_name, limit, start_index,
-        api_key_id=_get_api_key_id(),
-    )
-    text = _deprecation_banner("module_inspect", "name='...', method='qweb'") + text
-    return text
-
-
-@mcp.tool(**READONLY_TOOL_KWARGS)
-def list_js_patches(
-    odoo_version: str = "auto",
-    target: str | None = None,
-    module: str | None = None,
-    era: str | None = None,
-    profile_name: str | None = None,
-    limit: int = 200,
-    start_index: int = 0,
-) -> str:
-    """Enumerate JS patches across all eras (Widget extend, mixin, OWL patch).
-
-    `era` accepts era1 / era2 / era3 or the stored values extend /
-    include / patch (ADR-0023 §5.3).
-
-    TRIGGER when: "list JS patches on hr.employee", "all OWL patches in
-    Odoo 17", "Widget extends in v12", "JS patch nào trên model X",
-    "tất cả patch() trong module Y"
-    PREFER over: find_examples — that tool returns code snippets;
-    list_js_patches gives the structured per-target inventory.
-    SKIP when: caller wants OWL component declarations (not patches) →
-    use list_owl_components. Use find_examples for code-level patterns.
-    SKIP when (NEW): prefer module_inspect(name='...', method='js')
-        for JS patch enumeration with module context in one call (M11+)
-
-    Args:
-        odoo_version: '17.0' / '18.0' / 'auto'.
-        target: Optional filter on patched widget/component name.
-        module: Optional filter on patching module.
-        era: Optional — 'era1' (Widget extend), 'era2' (mixin),
-            'era3' (OWL patch); or extend/include/patch.
-        profile_name: Optional profile filter.
-        limit: Cypher LIMIT (default 200). Render cap is 10.
-        start_index: Zero-based pagination cursor (default 0).
-
-    Returns:
-        Tree text: header + per-module subtree of
-        `[ref=xN] target.patch_name : era=<era>` rows.
-
-    Example:
-        list_js_patches(odoo_version="17.0", target="ListController")
-        → JS patches on ListController (Odoo 17.0)
-          ├─ [odoo] sale_management
-          │   └─ [ref=x1] ListController.applyFilters : era=patch
-    """
-    text = _list_js_patches(
-        odoo_version, target, module, era, profile_name, limit, start_index,
-        api_key_id=_get_api_key_id(),
-    )
-    text = _deprecation_banner("module_inspect", "name='...', method='js'") + text
-    return text
-
-
 @mcp.tool(**READONLY_TOOL_KWARGS)
 def model_inspect(
     model: str,
@@ -5233,6 +4489,40 @@ def set_active_version(odoo_version: str) -> ToolResult:
                 "Use list_available_versions() to see what is indexed."
             )
         )])
+    # Sanity-check: confirm the version is actually indexed in Neo4j before pinning it.
+    try:
+        with _get_driver().session() as neo4j_session:
+            hit = neo4j_session.run(
+                "MATCH (m:Module {odoo_version: $v}) RETURN m LIMIT 1",
+                v=normalized,
+            ).data()
+        if not hit:
+            # Version not indexed — fetch available list for the error message.
+            with _get_driver().session() as neo4j_session:
+                rows = neo4j_session.run("""
+                    MATCH (m:Module)
+                    WITH DISTINCT m.odoo_version AS v
+                    WHERE v <> 'unknown' AND v =~ '\\d+\\.\\d+'
+                    RETURN v
+                    ORDER BY toInteger(split(v, '.')[0]) DESC,
+                             toInteger(split(v, '.')[1]) DESC
+                """).data()
+            available = [r["v"] for r in rows]
+            if available:
+                avail_str = ", ".join(available)
+                hint = f"Indexed versions: {avail_str}"
+            else:
+                hint = "No versions indexed yet — run the indexer first."
+            return ToolResult(content=[TextContent(type="text",
+                text=(
+                    f"Error: version '{normalized}' is not indexed in this knowledge base.\n"
+                    f"├─ {hint}\n"
+                    "└─ Use list_available_versions() to see what is available."
+                )
+            )])
+    except Exception as exc:
+        return ToolResult(content=[TextContent(type="text",
+            text=f"Error checking indexed versions: {exc}")])
     try:
         _session.set_active_version_db(_get_api_key_id(), normalized)
     except Exception as exc:
@@ -5265,6 +4555,38 @@ def set_active_profile(profile_name: str | None) -> ToolResult:
     Returns:
         Confirmation receipt with the pinned profile name and TTL duration.
     """
+    # Validate the profile exists before pinning it (None = clear, always valid).
+    if profile_name is not None:
+        try:
+            with _checkout_pg() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 FROM profiles WHERE name=%s", (profile_name,))
+                    found = cur.fetchone()
+        except Exception as exc:
+            return ToolResult(content=[TextContent(type="text",
+                text=f"Error checking profiles: {exc}")])
+        if not found:
+            # Profile not registered — list available ones for the error message.
+            try:
+                with _checkout_pg() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT name FROM profiles ORDER BY name")
+                        rows = cur.fetchall()
+                available = [r[0] for r in rows]
+            except Exception:
+                available = []
+            if available:
+                avail_str = ", ".join(available)
+                hint = f"Registered profiles: {avail_str}"
+            else:
+                hint = "No profiles registered yet — use the admin UI or manager CLI."
+            return ToolResult(content=[TextContent(type="text",
+                text=(
+                    f"Error: profile '{profile_name}' is not registered.\n"
+                    f"├─ {hint}\n"
+                    "└─ Use list_available_profiles() to see what is available."
+                )
+            )])
     try:
         _session.set_active_profile_db(_get_api_key_id(), profile_name)
     except Exception as exc:
