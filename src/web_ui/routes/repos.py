@@ -1036,11 +1036,14 @@ async def core_symbol_counts(request: Request, repo_id: int):
                     result = session.run(
                         "MATCH (cs:CoreSymbol) "
                         "RETURN cs.odoo_version AS version, COUNT(cs) AS cnt "
-                        "ORDER BY version"
+                        "ORDER BY toFloat(version)"
                     )
                     counts = {row["version"]: row["cnt"] for row in result}
         finally:
-            writer.close()
+            try:
+                writer.close()
+            except Exception:
+                pass
     except Exception as e:
         _logger.warning("core_symbol_counts Neo4j query failed for repo %s: %s", repo_id, e)
         return JSONResponse(_json_safe({"counts": {}}))

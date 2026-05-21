@@ -759,7 +759,7 @@ class AuthStore:
         This method is kept for backward compatibility only and will be removed
         in a future major release.  Only the canonical columns (actor, action,
         target, success) are written; legacy columns were dropped by migration
-        m10_001_drop_audit_legacy_columns.sql.
+        m9_010_drop_audit_legacy_columns.sql.
 
         New callers should use:
             from src.db.audit import write_audit_log
@@ -769,12 +769,12 @@ class AuthStore:
             actor_id: webui_users.id of the admin performing the action.
             action: Short action code (e.g. 'user.deactivate', 'user.reset_password').
             target_id: webui_users.id of the affected user (if applicable).
-            detail: Optional free-text detail string.
+            detail: Accepted for backward compatibility; not persisted (INSERT omits this column).
         """
         try:
             with self._pool.checkout() as conn:
                 # Canonical-only insert (M10 WI-4: legacy actor_id/target_id/detail_text
-                # columns dropped by migration m10_001_drop_audit_legacy_columns.sql).
+                # columns dropped by migration m9_010_drop_audit_legacy_columns.sql).
                 actor_str = str(actor_id) if actor_id is not None else "system"
                 target_str = str(target_id) if target_id is not None else None
                 self._pool.execute(

@@ -558,6 +558,28 @@ def test_decorator_deprecated_regression_still_deprecated():
     )
 
 
+def test_logger_warn_with_deprecation_warning_not_deprecated():
+    """logger.warn('x', DeprecationWarning) must NOT trigger deprecated status.
+
+    Only `warnings.warn(...)` calls (with `warnings` as the direct object) should
+    classify a method as deprecated.  A call via any other object (e.g. a logger)
+    must not match even when DeprecationWarning appears as an argument.
+    """
+    src = (
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "class BaseModel:\n"
+        "    def my_method(self):\n"
+        "        logger.warn('x', DeprecationWarning)\n"
+        "        return True\n"
+    )
+    syms = _extract_from_source(src, "odoo.models", "17.0")
+    mm = next(s for s in syms if s.qualified_name.endswith(".my_method"))
+    assert mm.status == "stable", (
+        f"logger.warn with DeprecationWarning should NOT be deprecated, got {mm.status!r}"
+    )
+
+
 def test_parse_odoo_core_v8_openerp_emits_legacy_symbols(tmp_path):
     """v8 complete tree: openerp/ namespace with legacy field declarations.
 

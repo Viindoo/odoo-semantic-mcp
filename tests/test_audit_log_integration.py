@@ -35,7 +35,7 @@ def _ensure_audit_log_table(conn) -> None:
         """)
         # Ensure canonical columns exist on pre-existing tables (idempotent).
         # Legacy W-UM columns (actor_id, target_id, detail_text) were dropped
-        # by migration m10_001_drop_audit_legacy_columns.sql (M10 WI-4).
+        # by migration m9_010_drop_audit_legacy_columns.sql (M10 WI-4).
         cur.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS actor TEXT")
         cur.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS action TEXT")
         cur.execute("ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS target TEXT")

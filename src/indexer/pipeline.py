@@ -1109,19 +1109,34 @@ def reembed_stubs_for_profile(
                     v=odoo_version, profile_name=profile_name,
                 ).data()
 
+            # Build registry once per repo (not per module) to avoid N+1 rglob scans.
+            from src.indexer.registry import build_registry  # noqa: PLC0415
+
+            _registry = build_registry([(local_path, odoo_version)])
+            # Flatten to {module_name: ModuleInfo} for O(1) lookup in the inner loop.
+            _modules_map: dict = {}
+            for _ver, _mmap in _registry.items():
+                _modules_map.update(_mmap)
+
+            # Batch-fetch embedding counts for all modules in this repo/version.
+            mod_names_in_rows: list[str] = [r["module_name"] for r in rows]
+            _embed_counts: dict[str, int] = {}
+            with pg_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT module, COUNT(*) FROM embeddings "
+                    "WHERE odoo_version = %s AND module = ANY(%s) "
+                    "GROUP BY module",
+                    (odoo_version, mod_names_in_rows),
+                )
+                for _mod, _cnt in cur.fetchall():
+                    _embed_counts[_mod] = _cnt
+
             # For each module: check embeddings count in pgvector.
             for row in rows:
                 mod_name: str = row["module_name"]
                 modules_checked += 1
 
-                with pg_conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT COUNT(*) FROM embeddings "
-                        "WHERE module = %s AND odoo_version = %s",
-                        (mod_name, odoo_version),
-                    )
-                    count_row = cur.fetchone()
-                    embedding_count: int = count_row[0] if count_row else 0
+                embedding_count: int = _embed_counts.get(mod_name, 0)
 
                 if embedding_count > 0:
                     # Already has embeddings — idempotent skip.
@@ -1132,64 +1147,59 @@ def reembed_stubs_for_profile(
                     continue
 
                 # Module has zero embeddings — re-embed it.
-                # Rebuild from disk via registry (same pattern as _index_repo).
-                from src.indexer.registry import build_registry  # noqa: PLC0415
-
+                if mod_name not in _modules_map:
+                    continue
                 try:
-                    registry = build_registry([(local_path, odoo_version)])
-                    for _ver, modules_map in registry.items():
-                        if mod_name not in modules_map:
-                            continue
-                        info = modules_map[mod_name]
+                    info = _modules_map[mod_name]
 
-                        # Parse all artefacts needed for make_chunks.
-                        from src.indexer import (  # noqa: PLC0415
-                            parser_css,
-                            parser_js,
-                            parser_python,
-                            parser_qweb,
-                            parser_scss,
-                            parser_xml,
-                        )
-                        from src.indexer.models import ViewParseResult  # noqa: PLC0415
-                        from src.indexer.writer_pgvector import (  # noqa: PLC0415
-                            make_css_chunks,
-                            make_scss_chunks,
-                        )
+                    # Parse all artefacts needed for make_chunks.
+                    from src.indexer import (  # noqa: PLC0415
+                        parser_css,
+                        parser_js,
+                        parser_python,
+                        parser_qweb,
+                        parser_scss,
+                        parser_xml,
+                    )
+                    from src.indexer.models import ViewParseResult  # noqa: PLC0415
+                    from src.indexer.writer_pgvector import (  # noqa: PLC0415
+                        make_css_chunks,
+                        make_scss_chunks,
+                    )
 
-                        py_result = parser_python.parse_module(info)
-                        xml_result = parser_xml.parse_module(info)
-                        qweb_result = parser_qweb.parse_module(info)
-                        merged = ViewParseResult(
-                            module=info,
-                            views=xml_result.views,
-                            qweb=qweb_result.qweb,
-                        )
-                        js_chunks = parser_js.parse_module(info)
-                        css_chunks_mod, _ = parser_css.parse_module(info)
-                        scss_chunks_mod, _ = parser_scss.parse_module(info)
+                    py_result = parser_python.parse_module(info)
+                    xml_result = parser_xml.parse_module(info)
+                    qweb_result = parser_qweb.parse_module(info)
+                    merged = ViewParseResult(
+                        module=info,
+                        views=xml_result.views,
+                        qweb=qweb_result.qweb,
+                    )
+                    js_chunks = parser_js.parse_module(info)
+                    css_chunks_mod, _ = parser_css.parse_module(info)
+                    scss_chunks_mod, _ = parser_scss.parse_module(info)
 
-                        chunks = make_chunks(mod_name, odoo_version, py_result, merged, js_chunks)
-                        chunks.extend(make_css_chunks(css_chunks_mod))
-                        chunks.extend(make_scss_chunks(scss_chunks_mod))
+                    chunks = make_chunks(mod_name, odoo_version, py_result, merged, js_chunks)
+                    chunks.extend(make_css_chunks(css_chunks_mod))
+                    chunks.extend(make_scss_chunks(scss_chunks_mod))
 
-                        if not chunks:
-                            _logger.debug(
-                                "reembed_stubs_for_profile: %s/%s produced 0 chunks — skip",
-                                odoo_version, mod_name,
-                            )
-                            continue
+                    if not chunks:
+                        _logger.debug(
+                            "reembed_stubs_for_profile: %s/%s produced 0 chunks — skip",
+                            odoo_version, mod_name,
+                        )
+                        continue
 
-                        embed_calls = write_module_embeddings(
-                            mod_name, odoo_version, chunks, embedder
-                        )
-                        total_embed_calls += embed_calls
-                        modules_reembedded += 1
-                        _logger.info(
-                            "reembed_stubs_for_profile: re-embedded %s/%s "
-                            "(%d chunks, %d embed calls)",
-                            odoo_version, mod_name, len(chunks), embed_calls,
-                        )
+                    embed_calls = write_module_embeddings(
+                        mod_name, odoo_version, chunks, embedder
+                    )
+                    total_embed_calls += embed_calls
+                    modules_reembedded += 1
+                    _logger.info(
+                        "reembed_stubs_for_profile: re-embedded %s/%s "
+                        "(%d chunks, %d embed calls)",
+                        odoo_version, mod_name, len(chunks), embed_calls,
+                    )
                 except Exception:
                     _logger.exception(
                         "reembed_stubs_for_profile: failed to re-embed %s/%s — skipping",
@@ -1273,20 +1283,25 @@ def audit_repo_for_profile(
                     v=odoo_version, profile_name=profile_name,
                 ).data()
 
+            # Batch-fetch embedding counts for all modules in this version (avoid N+1).
+            _audit_mod_names: list[str] = [r["module_name"] for r in rows]
+            _audit_embed_counts: dict[str, int] = {}
+            if embed_available and _audit_mod_names:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT module, COUNT(*) FROM embeddings "
+                        "WHERE odoo_version = %s AND module = ANY(%s) "
+                        "GROUP BY module",
+                        (odoo_version, _audit_mod_names),
+                    )
+                    for _mod, _cnt in cur.fetchall():
+                        _audit_embed_counts[_mod] = _cnt
+
             for row in rows:
                 mod_name: str = row["module_name"]
 
                 # Embedding count from pgvector (read-only). 0 when not available.
-                embedding_count: int = 0
-                if embed_available:
-                    with pg_conn.cursor() as cur:
-                        cur.execute(
-                            "SELECT COUNT(*) FROM embeddings "
-                            "WHERE module = %s AND odoo_version = %s",
-                            (mod_name, odoo_version),
-                        )
-                        count_row = cur.fetchone()
-                        embedding_count = count_row[0] if count_row else 0
+                embedding_count: int = _audit_embed_counts.get(mod_name, 0)
 
                 results.append({
                     "module": mod_name,

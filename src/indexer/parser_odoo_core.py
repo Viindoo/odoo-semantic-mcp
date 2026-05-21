@@ -99,8 +99,13 @@ def _has_body_level_deprecation_warning(fn_node: ast.FunctionDef | ast.AsyncFunc
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        # Must be an attribute call (e.g. warnings.warn)
-        if not (isinstance(func, ast.Attribute) and func.attr == "warn"):
+        # Must be exactly `warnings.warn(...)` — not logger.warn or any other .warn call.
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr == "warn"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "warnings"
+        ):
             continue
         # Collect all candidate nodes: positional args + keyword 'category' value
         candidates: list[ast.expr] = list(node.args)

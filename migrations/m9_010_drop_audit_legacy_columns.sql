@@ -1,4 +1,4 @@
--- migrations/m10_001_drop_audit_legacy_columns.sql
+-- migrations/m9_010_drop_audit_legacy_columns.sql
 -- M10 Polish: drop legacy W-UM columns from admin_audit_log.
 --
 -- Context (ADR-0021 §Legacy Column Deprecation):
