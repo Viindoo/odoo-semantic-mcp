@@ -171,7 +171,7 @@ def _assert_dual_channel(result, dto_class) -> None:
 
 
 def test_model_inspect_summary_text_channel(b3_db):
-    """model_inspect(method='summary') returns non-empty text with model name (replaces resolve_model)."""
+    """model_inspect(method='summary') returns non-empty text with model name."""
     import importlib
     server = importlib.import_module("src.mcp.server")
 
@@ -253,7 +253,7 @@ def test_describe_module_dual_channel(b3_db):
 
 
 def test_list_fields_structured_companion(b3_db):
-    """_list_fields_structured returns a valid ListFieldsOutput DTO (replaces list_fields wrapper test)."""
+    """_list_fields_structured returns a valid ListFieldsOutput DTO."""
     import importlib
     server = importlib.import_module("src.mcp.server")
 
@@ -269,7 +269,7 @@ def test_list_fields_structured_companion(b3_db):
 
 
 def test_list_methods_structured_companion(b3_db):
-    """_list_methods_structured returns a valid ListMethodsOutput DTO (replaces list_methods wrapper test)."""
+    """_list_methods_structured returns a valid ListMethodsOutput DTO."""
     import importlib
     server = importlib.import_module("src.mcp.server")
 

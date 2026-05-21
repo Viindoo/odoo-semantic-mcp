@@ -152,7 +152,7 @@ def seeded_neo4j_http(neo4j_driver):
 class TestMCPHTTPModelInspect:
     @pytest.mark.asyncio
     async def test_model_inspect_summary_tree_format(self, seeded_neo4j_http):
-        """model_inspect(method='summary') via HTTP returns tree format with module names + tree chars."""
+        """model_inspect summary via HTTP returns tree format + module names."""
         # JSON-RPC 2.0 request to call tools/call
         request_body = {
             "jsonrpc": "2.0",

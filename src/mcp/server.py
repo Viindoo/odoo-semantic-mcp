@@ -2224,7 +2224,8 @@ def _describe_module(
             first_def = defines[0]["name"]
             def_preview += (
                 f", ... and {overflow} more"
-                f" (use model_inspect(model='{first_def}', method='fields', odoo_version='{odoo_version}'))"
+                f" (use model_inspect(model='{first_def}', method='fields',"
+                f" odoo_version='{odoo_version}'))"
             )
         lines.append(f"├─ Defines models: {def_total} ({def_preview})")
     else:
@@ -2240,7 +2241,8 @@ def _describe_module(
             first_ext = extends[0]["name"]
             ext_preview += (
                 f", ... and {overflow} more"
-                f" (use model_inspect(model='{first_ext}', method='fields', odoo_version='{odoo_version}'))"
+                f" (use model_inspect(model='{first_ext}', method='fields',"
+                f" odoo_version='{odoo_version}'))"
             )
         lines.append(f"├─ Extends models: {ext_total} ({ext_preview})")
     else:
@@ -2704,7 +2706,10 @@ def _list_views_core(
             f"describe_module(name='{module}', odoo_version='{odoo_version}')"
             " for model fields"
         )
-        pager_tool = f"module_inspect(name='{module}', method='views', odoo_version='{odoo_version}'"
+        pager_tool = (
+            f"module_inspect(name='{module}', method='views',"
+            f" odoo_version='{odoo_version}'"
+        )
 
     if total == 0:
         next_line = format_next_step([empty_hint])
@@ -3955,7 +3960,8 @@ def _resolve_view_structured(
         extended_by=extended_by,
         next_step_hint=format_next_step(
             [
-                f"model_inspect(model='{v_props.get('model')}', method='views', odoo_version='{odoo_version}')"
+                f"model_inspect(model='{v_props.get('model')}', method='views',"
+                f" odoo_version='{odoo_version}')"
                 " for sibling views",
                 f"find_examples(query='{xmlid} xpath', odoo_version='{odoo_version}')"
                 " for inheritance patterns",
@@ -4316,6 +4322,8 @@ def model_inspect(
     *,
     field: str | None = None,
     method_name: str | None = None,
+    start_index: int = 0,
+    limit: int = 200,
 ) -> ToolResult:
     """Method-discriminator superset for model-scoped reads. See ADR-0028.
 
@@ -4336,6 +4344,8 @@ def model_inspect(
         profile_name: Optional profile filter.
         field: Required when method='field'. Field technical name.
         method_name: Required when method='method'. Method name.
+        start_index: Pagination cursor for fields/methods/views (zero-based).
+        limit: Max rows per page for fields/methods/views (default 200).
 
     Returns:
         Tree text identical to the underlying tool's output.
@@ -4352,6 +4362,8 @@ def model_inspect(
         field=field,
         method_name=method_name,
         api_key_id=_get_api_key_id(),
+        start_index=start_index,
+        limit=limit,
     )
     return ToolResult(content=[TextContent(type="text", text=text)])
 
@@ -4362,6 +4374,8 @@ def module_inspect(
     method: str,
     odoo_version: str = "auto",
     profile_name: str | None = None,
+    start_index: int = 0,
+    limit: int = 200,
 ) -> ToolResult:
     """Method-discriminator superset for module-scoped reads. See ADR-0028.
 
@@ -4379,6 +4393,8 @@ def module_inspect(
             'fields' and 'methods' return a guidance stub (model required).
         odoo_version: e.g. '17.0', '18.0'. 'auto' = latest indexed.
         profile_name: Optional profile filter.
+        start_index: Pagination cursor for views/owl/qweb/js (zero-based).
+        limit: Max rows per page for views/owl/qweb/js (default 200).
 
     Returns:
         Tree text identical to the underlying tool's output.
@@ -4393,6 +4409,8 @@ def module_inspect(
         odoo_version=odoo_version,
         profile_name=profile_name,
         api_key_id=_get_api_key_id(),
+        start_index=start_index,
+        limit=limit,
     )
     return ToolResult(content=[TextContent(type="text", text=text)])
 
