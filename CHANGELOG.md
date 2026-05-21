@@ -2,22 +2,20 @@
 
 All notable changes to Odoo Semantic MCP are documented here.
 
-## [Unreleased] — 2026-05-21 — Housekeeping: SPDX headers + script fix + ADR-0031
+## [0.5.0] — 2026-05-21 — M10.5 + M11 tool UX · go-live deploy · open-core split · security hardening
 
-### Changed
+Consolidated release covering all work since v0.4.1: the M10.5 + M11 tool-UX/architecture batch, the go-live production deploy, the M9 Coverage Fill + RBAC follow-ups, the open-core repo split with AGPL license metadata, the internal-data security purge, and SPDX/housekeeping. Sub-sections below are grouped by theme and date.
+
+### Housekeeping — SPDX headers + script fix + ADR-0031 (2026-05-21)
 - [SPLIT] Housekeeping: added SPDX-License-Identifier: AGPL-3.0-or-later headers to all 200 `tests/**/*.py` and 6 `scripts/` files (`.py` + `.sh`). Fixed `add-spdx-headers.sh` `prepend_py()` to insert SPDX as line 2 when shebang is present (preserves shebang executability). Extended script to cover `tests/`, `scripts/*.py`, and `scripts/*.sh` targets. Added ADR-0031 (python-dotenv auto-load at CLI entry points) to `CLAUDE.md` ADR list.
 
-## [Unreleased] — 2026-05-20 — Security: purge internal deployment data
-
-### Security
+### Security — purge internal deployment data (2026-05-20)
 - [SECURITY] Purged private Viindoo deployment topology (private repo names, seed roster, version presets) from the public repository. Master-data seed roster removed; profiles and repos are now created by admins via the web UI or JSON API. History rewrite applied.
 
-## [Unreleased] — 2026-05-20 — Open-core repo split + AGPL license metadata
-
-### Changed
+### Open-core repo split + AGPL license metadata (2026-05-20)
 - [SPLIT] Moved MIT plugin + client docs to Viindoo/odoo-mcp-client. Server repo retains AGPL-3.0 backend + Astro web UI. Added SPDX-License-Identifier: AGPL-3.0-or-later headers across all 88 `src/**/*.py` files and 42 `site/src/**` files (.ts/.tsx/.astro). Added license field to `pyproject.toml` and `site/package.json`. Added copyright + applicability notice atop `LICENSE`. Added `NOTICE` (Viindoo trademark statement + common_passwords attribution) and `data/common_passwords.txt.LICENSE`.
 
-## [Unreleased] — 2026-05-18 — Post-0.4.1 hardening + go-live deploy + M9 Coverage Fill + M9 RBAC follow-up
+### Post-0.4.1 hardening + go-live deploy + M9 Coverage Fill + M9 RBAC follow-up (2026-05-18)
 
 6 PRs merged after v0.4.1. Production deployed at PR #119 / commit `3f081b9` (admin-invite signup model active). PR #120 (M9 Coverage Fill) + PR #121 (docs signoff) merged but not yet deployed to prod. Two post-deploy hotfixes shipped 2026-05-18 — PR #124 (`init_pool` ordering in seed_patterns CLI) and PR #125 (CLIFlag null command_name MERGE bug surfaced when running `index-core` against M9 curated spec_data). PR #<TBD> (M9 RBAC follow-up) in progress.
 
@@ -129,7 +127,7 @@ All notable changes to Odoo Semantic MCP are documented here.
 - Deduplicated 9 redundant TASKS.md backlog entries (NAMEGET, v8 era1 CLI, VN translation, pricing, nonce CSP) — each item now lives in exactly one canonical milestone location.
 - Split Milestone 10 into M10A (Tool Surface Expansion) + M10B (Billing Wow Core) + M10C (Polish + Observability) for clearer scope.
 
-### Production state at time of [Unreleased] cut
+### Production state at go-live cut (2026-05-18)
 
 - Production HEAD: PR #119 / commit `3f081b9` deployed 2026-05-17 (PR #120 + #121 not yet deployed to prod).
 - Neo4j: 0 NULL profile nodes (down from 5,988 pre-cleanup); 0 pre-v14 OWLComp anachronisms among NULL-profile set; 239 `__unresolved__` v8-v13 OWLComp stubs remain (have profile set; tracked as followup #12).
@@ -172,9 +170,7 @@ All notable changes to Odoo Semantic MCP are documented here.
 - CLAUDE.md new section "Auth — is_admin Source of Truth" (1 paragraph clarifying the DB-sourced rule).
 - CHANGELOG.md (this section).
 
----
-
-## [0.5.0] — 2026-05-19 — Tool UX + Architecture (M10.5 + M11)
+### Tool UX + Architecture — M10.5 + M11 (2026-05-19)
 
 6 waves + 8 patterns landed in a single worktree via the `feat/m10-5-m11-tool-ux-architecture` branch (33 commits over Waves A–F + F-FINAL). Plan: internal plan (archived). Research: 12 MCP design patterns evaluated, 8 adopted (archived internally). 3 new ADRs (0028/0029/0030) + ADR-0023 amended.
 
