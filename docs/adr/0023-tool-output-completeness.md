@@ -288,7 +288,7 @@ A hint MUST NOT violate the calling tool's own docstring `SKIP` clause. Examples
 
 The CI test (`test_next_step_no_loop`) asserts the suggested tool name in `Next:` is never the calling tool's own name.
 
-#### 4.3 MUST emit footer — 18 drill-down tools
+#### 4.3 MUST emit footer — 24 drill-down tools
 
 These tools always end with `└─ Next: ...`. The Wave 1 retrofit/implementation adds the footer:
 
@@ -312,6 +312,12 @@ These tools always end with `└─ Next: ...`. The Wave 1 retrofit/implementati
 | `find_deprecated_usage` | `impact_analysis(pattern=X, odoo_version=V) for blast radius \| api_version_diff(from=V_old, to=V_new) for migration delta` |
 | `lookup_core_api` | `find_examples(query='X usage', odoo_version=V) for in-the-wild patterns \| suggest_pattern(query=X, odoo_version=V) for curated examples` |
 | `suggest_pattern` | `find_examples(query=X, odoo_version=V) for real-world variants \| resolve_method(model=M, method=X, odoo_version=V) when pattern targets a method` |
+| `resolve_stylesheet` (M10A) | `find_style_override(selector_or_variable=X, odoo_version=V) to trace an override \| describe_module(name=M, odoo_version=V) for full module overview` |
+| `find_style_override` (M10A) | `resolve_stylesheet(module=M, odoo_version=V) to list all stylesheets \| describe_module(name=M, odoo_version=V) for module context` |
+| `resolve_orm_chain` (M10.5 P2) | `entity_lookup(kind='field', model=M, field=F, odoo_version=V) for terminal field detail \| model_inspect(model=M, method='fields', odoo_version=V) to list valid fields at the broken step` |
+| `validate_domain` (M10.5 P2) | `resolve_orm_chain(model=M, dotted_path=P, odoo_version=V) to debug one path \| model_inspect(model=M, method='fields', odoo_version=V) to list valid fields` |
+| `validate_depends` (M10.5 P2) | `resolve_orm_chain(model=M, dotted_path=P, odoo_version=V) to debug one dependency \| model_inspect(model=M, method='fields', odoo_version=V) to list valid fields` |
+| `validate_relation` (M10.5 P2) | `entity_lookup(kind='field', model=M, field=F, odoo_version=V) for field detail \| model_inspect(model=M, method='fields', odoo_version=V) to list relational fields` |
 
 #### 4.4 MAY skip footer — 3 terminal tools
 

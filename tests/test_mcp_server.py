@@ -2547,6 +2547,15 @@ def _all_tool_invocations(version: str):
          lambda: srv._resolve_stylesheet("sale", version)),
         ("find_style_override",
          lambda: srv._find_style_override("", version)),
+        # M10.5 P2 ORM-validation tools
+        ("resolve_orm_chain",
+         lambda: srv._resolve_orm_chain("sale.order", "amount_total", version)),
+        ("validate_domain",
+         lambda: srv._validate_domain("sale.order", "[('amount_total', '>', 0)]", version)),
+        ("validate_depends",
+         lambda: srv._validate_depends("sale.order", "action_confirm", version)),
+        ("validate_relation",
+         lambda: srv._validate_relation("sale.order", "amount_total", "res.partner", version)),
     ]
 
 
