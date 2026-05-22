@@ -66,7 +66,7 @@ dùng để định hướng parser và indexer của OSM.
 **Styles:**
 - v8-v11: LESS (Bootstrap 3.x). Parser: `src/indexer/parser_less.py`.
 - v12+: SCSS (Bootstrap 4/5). Parser: `src/indexer/parser_scss.py`.
-- Bootstrap version chính xác: xem `src/indexer/spec_data/bootstrap_versions.json`.
+- Bootstrap version (major.minor used by the indexer): xem `src/indexer/spec_data/bootstrap_versions.json`. The patch-level versions in the table below are from the upstream Odoo source survey; the JSON stores only the major.minor needed by the indexer and intentionally omits patch digits that do not affect compatibility.
 
 ---
 

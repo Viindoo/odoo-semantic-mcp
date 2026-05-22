@@ -69,10 +69,10 @@ cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
 ```
 Expected: `deleted_test_artifacts = 1` (or 0 if already removed).
 
-**1b. Remove pre-v14 `__unresolved__` OWLComponent stubs (239 anachronisms):**
+**1b. Remove pre-v14 `__unresolved__` OWLComp stubs (239 anachronisms):**
 ```bash
 cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
-    "MATCH (oc:OWLComponent)
+    "MATCH (oc:OWLComp)
      WHERE oc.odoo_version IN ['8.0','9.0','10.0','11.0','12.0','13.0']
        AND oc.module = '__unresolved__'
      DETACH DELETE oc
@@ -126,28 +126,31 @@ Alert: if any version shows a drop >20% from the pre-flight baseline, suspect a 
 **Spot-check odoo.tools.SQL availability (WI-4):**
 ```bash
 cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
-    "MATCH (c:CoreSymbol {name: 'SQL', odoo_version: '17.0'})
+    "MATCH (c:CoreSymbol {qualified_name: 'odoo.tools.SQL', odoo_version: '17.0'})
      RETURN c.status AS status, c.qualified_name AS qname;"
 ```
-Expected: `status = 'stable'`, `qname` contains `'odoo.tools.SQL'`.
+Expected: `status = 'stable'`, `qname = 'odoo.tools.SQL'`.
 
 ```bash
 cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
-    "MATCH (c:CoreSymbol {name: 'SQL', odoo_version: '16.0'})
+    "MATCH (c:CoreSymbol {qualified_name: 'odoo.tools.SQL', odoo_version: '16.0'})
      RETURN count(c) AS count;"
 ```
-Expected: `count = 0` (not-available in v16).
+Expected: `count = 0` (correct — SQL is absent in v16; the tool returns "not found in indexed Odoo core for version 16.0").
 
 **Spot-check field_type fix for v18/v19 (WI-1):**
 ```bash
 cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
     "MATCH (c:CoreSymbol)
      WHERE c.odoo_version IN ['18.0','19.0'] AND c.kind = 'field_type'
-       AND c.name IN ['Integer','Many2one','Char','Float']
-     RETURN c.odoo_version AS version, c.name AS name, c.kind AS kind
-     ORDER BY version, name;"
+       AND (c.qualified_name ENDS WITH '.Integer'
+         OR c.qualified_name ENDS WITH '.Many2one'
+         OR c.qualified_name ENDS WITH '.Char'
+         OR c.qualified_name ENDS WITH '.Float')
+     RETURN c.odoo_version AS version, c.qualified_name AS qname, c.kind AS kind
+     ORDER BY version, qname;"
 ```
-Expected: 8 rows (4 field names × 2 versions), all `kind = 'field_type'`.
+Expected: ≥8 rows (4 field types × 2 versions), all `kind = 'field_type'`.
 
 **Spot-check CLICommand for v8/v9 (WI-2):**
 ```bash
@@ -263,9 +266,9 @@ curl -s -X POST "https://<MCP_HOST>/mcp" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
           "name":"lookup_core_api",
           "arguments":{"name":"odoo.tools.SQL","odoo_version":"16.0"}}}' \
-    | python3 -m json.tool | grep -E "status|not.available"
+    | python3 -m json.tool | grep -E "not found|not.available"
 ```
-Expected: `status` = `"not-available"` (or "not_available").
+Expected: response text contains `"not found in indexed Odoo core for version 16.0"` (SQL is absent in v16).
 
 ```bash
 curl -s -X POST "https://<MCP_HOST>/mcp" \
@@ -314,11 +317,11 @@ cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
 ```
 Expected: 0 rows (or only legacy nodes from before ADR-0016 profile enforcement).
 
-### 5.6 `__unresolved__` OWLComponent post-cleanup
+### 5.6 `__unresolved__` OWLComp post-cleanup
 
 ```bash
 cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
-    "MATCH (oc:OWLComponent {module:'__unresolved__'})
+    "MATCH (oc:OWLComp {module:'__unresolved__'})
      WHERE oc.odoo_version IN ['8.0','9.0','10.0','11.0','12.0','13.0']
      RETURN count(oc) AS count;"
 ```

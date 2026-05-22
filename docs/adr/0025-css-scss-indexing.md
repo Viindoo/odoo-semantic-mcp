@@ -171,7 +171,7 @@ Odoo v8-v11 used `.less` files (Bootstrap 3.x LESS source). These were excluded 
 
 ### Implementation notes
 
-- `parser_less.py` regex approach: selector block extraction via `r'([.#\w][^{};/]+)\s*\{'`, variable detection via `r'@([\w-]+)\s*:'` (word-boundary anchored to avoid false matches in URL values), `@import` chain extraction identical to `parser_scss`. Accuracy comparable to regex fallback in `parser_scss`.
+- `parser_less.py` regex approach: selector block extraction via `_RE_SELECTOR = r'^([^@\s{}\n][^{}\n]*)\s*\{'` (MULTILINE; skips at-rule lines that start with `@`); variable detection via `_RE_LESS_VAR` — a line-anchored MULTILINE pattern `^\s*@(?!<at-rule-keywords>(?![\w-]))[\w-]+\s*:` that excludes CSS at-rule keywords (`import`, `media`, `charset`, `keyframes`, `font-face`, `mixin`, `include`, `extend`, `use`, `forward`, `page`, `viewport`) via a negative lookahead, with `(?![\w-])` ensuring only complete keyword tokens are excluded (so `@media-breakpoint-xs` or `@page-header-height` are still captured as variables). `@import` chain extraction identical to `parser_scss`. Accuracy comparable to regex fallback in `parser_scss`.
 - `:Stylesheet {language: "less"}` nodes are created with `mixin_count > 0` when `.mixin()` or `#namespace > .method()` patterns are detected.
 - `:IMPORTS` edges between LESS nodes follow the same silent-skip policy as D3 (target not yet indexed → skip silently).
 - `chunk_type='less'` embeddings in pgvector allow ANN queries filtered to LESS content only.

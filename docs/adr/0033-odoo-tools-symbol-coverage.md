@@ -55,7 +55,7 @@ Given that the problem is **AI misuse patterns** (not API discovery), curated is
 | Symbol group | Included | Reasoning |
 |---|---|---|
 | `odoo.tools.SQL` | v17+ | Classic version-hallucination target |
-| `odoo.tools.safe_eval.safe_eval` | all versions | Wrong import path most common mistake |
+| `odoo.tools.safe_eval.safe_eval` | all versions | Coverage via `parser_odoo_core` (parses `odoo/tools/safe_eval.py`) — NOT via curation. Curated entry is excluded at dedup time (parsed node wins). Listed here for scope completeness. |
 | `image_resize_image*` | v8-v12 (stable), absent v13+ | Removal at v13 is high-impact breakage |
 | `odoo.tools.image_process` | v13+ | Replacement for image_resize_image |
 | `format_datetime`, `format_amount`, `get_lang` | v13+ | Introduced v13; absent v8-v12 |

@@ -32,7 +32,7 @@ operation, not a multi-file hunt.
 Introduce **`src/indexer/version_registry.py`** — a minimal shared abstraction:
 
 ```python
-class VersionRegistry(Generic[T]):
+class VersionRegistry[T]:
     """Sorted (min_major, max_major|None, handler) registry. First match wins."""
 
     def __init__(self, entries: list[tuple[int, int | None, T]]) -> None: ...
