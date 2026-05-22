@@ -247,7 +247,8 @@ class CoreSymbolInfo:
     """An Odoo upstream API entity, captured per version.
 
     Composite key: (qualified_name, odoo_version) — see ADR-0002 §1.
-    `kind` ∈ {function, class, decorator, exception, field_type, orm_method, cursor_method}.
+    `kind` ∈ {function, class, decorator, exception, field_type, orm_method, cursor_method,
+              tool_export}.
     `status` ∈ {stable, deprecated, removed, added}.
     `replacement_qname` non-null when this symbol is superseded by another.
     """

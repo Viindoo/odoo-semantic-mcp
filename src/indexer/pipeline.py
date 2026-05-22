@@ -827,13 +827,23 @@ def index_core(
     from src.indexer.parser_cli import parse_cli_commands, parse_cli_flags
     from src.indexer.parser_lint_rules import parse_lint_rules_for_version
     from src.indexer.parser_odoo_core import parse_odoo_core
+    from src.indexer.parser_tools_symbols import load_tools_symbols
 
     _logger.info("index_core: version=%s source_root=%s", odoo_version, source_root)
 
-    # 1. CoreSymbol
+    # 1. CoreSymbol (parsed from source) + curated odoo.tools.* symbols merged in.
+    # Tool symbols are merged BEFORE write_core_symbols and compute_diff so they
+    # participate fully in lifecycle tracking (added_in/removed_in/deprecated_in).
+    # fetch_core_symbols() reads from Neo4j, so prior-run tool symbols are already
+    # included in old_symbols automatically — no extra step needed.
     symbols = parse_odoo_core(source_root, odoo_version)
+    tool_symbols = load_tools_symbols(odoo_version, static_data_dir=static_data_dir)
+    symbols = symbols + tool_symbols
     writer.write_core_symbols(symbols)
-    _logger.info("index_core: wrote %d CoreSymbol nodes", len(symbols))
+    _logger.info(
+        "index_core: wrote %d CoreSymbol nodes (%d from odoo.tools curation)",
+        len(symbols), len(tool_symbols),
+    )
 
     # 2. LintRule
     rules = parse_lint_rules_for_version(
